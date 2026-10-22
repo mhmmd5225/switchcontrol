@@ -6,7 +6,8 @@
 //! - `init()`: once at startup (DPI awareness, permission prompts)
 //! - `Capture::start() -> (Capture, Receiver<CaptureEvent>)`, `set_grab(bool)`
 //! - `Injector::new()`, `inject(&InputEvent)`
-//! - `monitors()`, `cursor_pos()`, `secure_input_active()`, `permissions()`
+//! - `monitors()`, `cursor_pos()`, `secure_input_active()`, `permissions()`,
+//!   `held_keys()`
 
 mod event;
 

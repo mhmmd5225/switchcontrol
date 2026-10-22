@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use sc_core::{Action, Config, Node};
+use sc_core::{Action, Config, EdgeHint, Node};
 use sc_platform::sys::{self, Capture, Injector};
 use sc_platform::{CaptureEvent, InputEvent};
 use sc_proto::{Message, Os};
@@ -40,6 +40,8 @@ pub enum Report {
     Link(LinkState),
     /// Keyboard and mouse now drive the other computer (true) or this one.
     Remote(bool),
+    /// The cursor is near the edge to the other computer (or no longer is).
+    Edge(Option<EdgeHint>),
     /// Pairing: show this PIN so the user can type it on the other computer.
     ShowPin(String),
     /// Pairing: the user must type the PIN shown on the other computer.
@@ -114,6 +116,7 @@ fn run(
             peer_side: settings.side,
             swap_ctrl_cmd: settings.swap_ctrl_cmd,
             speed: settings.speed,
+            edge_delay: settings.edge_delay,
         },
         Os::current(),
         settings.name.clone(),
@@ -276,11 +279,21 @@ impl Out<'_> {
             },
             Action::Grab(on) => {
                 match &self.io.capture {
-                    Some(capture) => capture.set_grab(on),
+                    Some(capture) => {
+                        // Their key-ups would be swallowed, leaving them stuck down here.
+                        let held = if on { sys::held_keys() } else { Vec::new() };
+                        capture.set_grab(on);
+                        if let Some(injector) = self.io.injector.as_mut() {
+                            for usage in held {
+                                let _ = injector.inject(&InputEvent::Key { usage, down: false });
+                            }
+                        }
+                    }
                     None => self.log(format!("grab {on}")),
                 }
                 (self.report)(Report::Remote(on));
             }
+            Action::Edge(hint) => (self.report)(Report::Edge(hint)),
             Action::Log(text) => self.log(text),
         }
     }

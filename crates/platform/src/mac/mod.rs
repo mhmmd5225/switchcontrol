@@ -71,6 +71,16 @@ pub fn monitors() -> Vec<Monitor> {
         .collect()
 }
 
+/// HID usages of the keys macOS considers held right now.
+pub fn held_keys() -> Vec<u16> {
+    (0u16..0x80)
+        .filter(|&code| unsafe {
+            ffi::CGEventSourceKeyState(ffi::kCGEventSourceStateHIDSystemState, code)
+        })
+        .filter_map(sc_keymap::hid_from_mac)
+        .collect()
+}
+
 pub fn cursor_pos() -> Option<(i32, i32)> {
     let p = inject::current_location()?;
     Some((p.x.floor() as i32, p.y.floor() as i32))

@@ -29,6 +29,10 @@ pub fn monitors() -> Vec<Monitor> {
     }]
 }
 
+pub fn held_keys() -> Vec<u16> {
+    Vec::new()
+}
+
 pub fn cursor_pos() -> Option<(i32, i32)> {
     None
 }

@@ -1,6 +1,7 @@
 //! Settings from an optional TOML file, overridden by command-line flags.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use sc_core::Side;
 use sc_proto::DEFAULT_PORT;
@@ -18,6 +19,7 @@ usage: switchcontrol --side left|right [--listen ADDR | --connect ADDR] [options
   --name NAME         name shown to the peer (default: computer name)
   --speed F           pointer speed on the peer (default 1.0)
   --no-swap           keep Ctrl and Cmd/Win as they are
+  --edge-delay MS     push against the edge this long before crossing (default 0)
   --config FILE       read these settings from a TOML file (flags win)
   --pin PIN           PIN for pairing, instead of typing it when asked
   --data-dir DIR      where this computer's certificate and paired peers live
@@ -43,6 +45,9 @@ pub struct Settings {
     pub net: NetMode,
     pub swap_ctrl_cmd: bool,
     pub speed: f64,
+    pub edge_delay: Duration,
+    /// Draw a bar at the shared edge when the cursor comes near (window only).
+    pub edge_bar: bool,
     pub pin: Option<String>,
     pub data_dir: PathBuf,
     pub forget_peers: bool,
@@ -61,6 +66,8 @@ pub struct FileConfig {
     pub connect: Option<String>,
     pub speed: Option<f64>,
     pub swap_ctrl_cmd: Option<bool>,
+    pub edge_delay_ms: Option<u64>,
+    pub edge_bar: Option<bool>,
     pub data_dir: Option<PathBuf>,
 }
 
@@ -91,6 +98,12 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
                 cli.speed = Some(raw.parse().map_err(|_| format!("--speed: not a number: {raw}"))?);
             }
             "--no-swap" => cli.swap_ctrl_cmd = Some(false),
+            "--edge-delay" => {
+                let raw = value()?;
+                cli.edge_delay_ms = Some(
+                    raw.parse().map_err(|_| format!("--edge-delay: not milliseconds: {raw}"))?,
+                );
+            }
             "--config" => file = load(Path::new(&value()?))?,
             "--pin" => {
                 let raw = value()?;
@@ -119,6 +132,8 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
         connect,
         speed: cli.speed.or(file.speed),
         swap_ctrl_cmd: cli.swap_ctrl_cmd.or(file.swap_ctrl_cmd),
+        edge_delay_ms: cli.edge_delay_ms.or(file.edge_delay_ms),
+        edge_bar: file.edge_bar,
         data_dir: cli.data_dir.or(file.data_dir),
     };
     resolve(merged, flags)
@@ -142,6 +157,10 @@ pub fn resolve(config: FileConfig, flags: RunFlags) -> Result<Settings, String> 
     if !(speed > 0.0 && speed <= 10.0) {
         return Err(format!("speed must be in (0, 10], not {speed}"));
     }
+    let edge_delay_ms = config.edge_delay_ms.unwrap_or(0);
+    if edge_delay_ms > 5000 {
+        return Err(format!("edge delay must be at most 5000 ms, not {edge_delay_ms}"));
+    }
 
     Ok(Settings {
         name: config.name.filter(|n| !n.trim().is_empty()).unwrap_or_else(default_name),
@@ -149,6 +168,8 @@ pub fn resolve(config: FileConfig, flags: RunFlags) -> Result<Settings, String> 
         net,
         swap_ctrl_cmd: config.swap_ctrl_cmd.unwrap_or(true),
         speed,
+        edge_delay: Duration::from_millis(edge_delay_ms),
+        edge_bar: config.edge_bar.unwrap_or(true),
         pin: flags.pin,
         data_dir: config.data_dir.unwrap_or_else(identity::default_dir),
         forget_peers: flags.forget_peers,
@@ -215,7 +236,9 @@ mod tests {
 
     #[test]
     fn connect_adds_default_port() {
-        let s = parse("--side left --connect 192.168.1.20 --no-swap --speed 1.5").unwrap();
+        let s = parse("--side left --connect 192.168.1.20 --no-swap --speed 1.5 --edge-delay 300")
+            .unwrap();
+        assert_eq!(s.edge_delay, Duration::from_millis(300));
         assert_eq!(s.net, NetMode::Connect("192.168.1.20:24800".into()));
         assert!(!s.swap_ctrl_cmd);
         assert_eq!(s.speed, 1.5);
@@ -236,6 +259,8 @@ mod tests {
         assert!(parse("--side up").is_err());
         assert!(parse("--side left --listen :1 --connect x").is_err());
         assert!(parse("--side left --speed 0").is_err());
+        assert!(parse("--side left --edge-delay 9000").is_err());
+        assert!(parse("--side left --edge-delay -1").is_err());
         assert!(parse("--side left --bogus").is_err());
     }
 

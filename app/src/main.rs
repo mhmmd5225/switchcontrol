@@ -8,6 +8,7 @@
 //! arguments it runs in the terminal.
 
 mod config;
+mod edgebar;
 mod engine;
 mod gui;
 mod identity;
@@ -64,7 +65,11 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
             // The log already says all this in the terminal.
-            Report::Link(_) | Report::Remote(_) | Report::ShowPin(_) | Report::AskPin(_) => {}
+            Report::Link(_)
+            | Report::Remote(_)
+            | Report::Edge(_)
+            | Report::ShowPin(_)
+            | Report::AskPin(_) => {}
         }
     }
     engine.wait();

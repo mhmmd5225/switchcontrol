@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use sc_keymap::usage;
 
 use super::*;
@@ -6,7 +8,7 @@ const PC_SCREEN: Rect = Rect { left: 0, top: 0, right: 2560, bottom: 1440 };
 const MAC_SCREEN: Rect = Rect { left: 0, top: 0, right: 1512, bottom: 982 };
 
 fn config(peer_side: Side) -> Config {
-    Config { peer_side, swap_ctrl_cmd: true, speed: 1.0 }
+    Config { peer_side, swap_ctrl_cmd: true, speed: 1.0, edge_delay: Duration::ZERO }
 }
 
 /// A Windows PC with the Mac to its right, already connected.
@@ -59,10 +61,10 @@ fn injected(actions: &[Action]) -> Vec<InputEvent> {
 #[test]
 fn crossing_the_right_edge_enters_the_peer() {
     let mut pc = pc();
-    assert!(pc.local_input(moved(2558, 720)).is_empty());
+    assert!(sent(&pc.local_input(moved(2558, 720))).is_empty());
 
     let actions = pc.local_input(moved(2559, 720));
-    assert_eq!(actions[0], Action::Grab(true));
+    assert!(actions.contains(&Action::Grab(true)));
     assert_eq!(sent(&actions), vec![Message::Enter { x: 0, y: 491 }]);
     assert!(pc.is_remote());
 }
@@ -76,7 +78,7 @@ fn no_crossing_without_peer_or_while_dragging() {
     pc.local_input(InputEvent::Button { button: MouseButton::Left, down: true });
     assert!(pc.local_input(moved(2559, 720)).is_empty());
     pc.local_input(InputEvent::Button { button: MouseButton::Left, down: false });
-    assert!(!pc.local_input(moved(2559, 720)).is_empty());
+    assert!(pc.local_input(moved(2559, 720)).contains(&Action::Grab(true)));
 }
 
 #[test]
@@ -136,12 +138,82 @@ fn held_button_on_peer_blocks_return() {
     assert!(!pc.is_remote());
 }
 
+fn edges(actions: &[Action]) -> Vec<Option<EdgeHint>> {
+    actions
+        .iter()
+        .filter_map(|a| match a {
+            Action::Edge(h) => Some(*h),
+            _ => None,
+        })
+        .collect()
+}
+
+fn hint(near: u8, push: u8) -> Option<EdgeHint> {
+    Some(EdgeHint { side: Side::Right, x: 2559, top: 0, bottom: 1440, near, push })
+}
+
 #[test]
-fn keys_held_while_crossing_are_released_locally() {
+fn bar_shows_near_the_shared_edge_only() {
     let mut pc = pc();
-    pc.local_input(key(usage::LEFT_SHIFT, true));
+    assert!(pc.local_input(moved(1000, 720)).is_empty());
+    assert!(pc.local_input(moved(2559 - EDGE_NEAR, 720)).is_empty());
+    assert_eq!(edges(&pc.local_input(moved(2559 - EDGE_NEAR + 1, 720))), vec![hint(1, 0)]);
+    assert_eq!(edges(&pc.local_input(moved(2558, 720))), vec![hint(10, 0)]);
+    // Same step: nothing new to draw.
+    assert!(pc.local_input(moved(2558, 700)).is_empty());
+    assert_eq!(edges(&pc.local_input(moved(1000, 720))), vec![None]);
+
+    // Not near the other edge, and not while dragging.
+    assert!(pc.local_input(moved(10, 720)).is_empty());
+    pc.local_input(moved(2550, 720));
+    let actions = pc.local_input(InputEvent::Button { button: MouseButton::Left, down: true });
+    assert_eq!(edges(&actions), vec![None]);
+    assert!(pc.local_input(moved(2558, 720)).is_empty());
+}
+
+#[test]
+fn bar_hides_when_crossing() {
+    let mut pc = pc();
+    pc.local_input(moved(2550, 720));
     let actions = pc.local_input(moved(2559, 720));
-    assert_eq!(injected(&actions), vec![key(usage::LEFT_SHIFT, false)]);
+    assert_eq!(actions[0], Action::Edge(None));
+    assert_eq!(actions[1], Action::Grab(true));
+}
+
+#[test]
+fn edge_delay_needs_a_push() {
+    let mut node = pc();
+    node.config.edge_delay = Duration::from_millis(400);
+    let t0 = Instant::now();
+    let at = |ms| t0 + Duration::from_millis(ms);
+
+    assert_eq!(edges(&node.local_input_at(moved(2559, 720), at(0))), vec![hint(10, 0)]);
+    assert_eq!(edges(&node.local_input_at(moved(2559, 720), at(200))), vec![hint(10, 5)]);
+    assert!(!node.is_remote());
+    let actions = node.local_input_at(moved(2559, 720), at(400));
+    assert!(actions.contains(&Action::Grab(true)));
+    assert!(node.is_remote());
+
+    // Backing off the edge starts the push over.
+    let mut node = pc();
+    node.config.edge_delay = Duration::from_millis(400);
+    node.local_input_at(moved(2559, 720), at(0));
+    node.local_input_at(moved(2550, 720), at(300));
+    node.local_input_at(moved(2559, 720), at(350));
+    assert!(!node.local_input_at(moved(2559, 720), at(500)).contains(&Action::Grab(true)));
+    assert!(node.local_input_at(moved(2559, 720), at(750)).contains(&Action::Grab(true)));
+}
+
+#[test]
+fn multi_monitor_bar_covers_the_monitor_under_the_cursor() {
+    // A short monitor to the right of the main one.
+    let screens = vec![PC_SCREEN, Rect { left: 2560, top: 0, right: 4480, bottom: 1080 }];
+    let mut pc = Node::new(config(Side::Right), Os::Windows, "pc".into(), screens);
+    pc.peer_connected(mac().hello());
+    let expected = EdgeHint { side: Side::Right, x: 4479, top: 0, bottom: 1080, near: 10, push: 0 };
+    assert_eq!(edges(&pc.local_input(moved(4478, 500))), vec![Some(expected)]);
+    // Next to the main monitor's right side there is no edge to the peer.
+    assert_eq!(edges(&pc.local_input(moved(2558, 1200))), vec![None]);
 }
 
 #[test]

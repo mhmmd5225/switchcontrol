@@ -17,6 +17,7 @@ use sc_platform::Permissions;
 use sc_platform::sys;
 
 use crate::config::{self, FileConfig, RunFlags};
+use crate::edgebar::{EdgeBar, Strip};
 use crate::engine::{Engine, LinkState, Report};
 use crate::identity::{self, TrustStore};
 use crate::net::{self, PinSource, Waiting};
@@ -68,6 +69,8 @@ struct Form {
     name: String,
     speed: f64,
     swap: bool,
+    edge_delay_ms: u64,
+    edge_bar: bool,
     /// Kept from the file; the window has no field for it.
     listen: Option<String>,
 }
@@ -88,6 +91,8 @@ impl Form {
             name: file.name.unwrap_or_else(config::default_name),
             speed: file.speed.unwrap_or(1.0),
             swap: file.swap_ctrl_cmd.unwrap_or(true),
+            edge_delay_ms: file.edge_delay_ms.unwrap_or(0),
+            edge_bar: file.edge_bar.unwrap_or(true),
             listen: file.listen,
         }
     }
@@ -101,6 +106,8 @@ impl Form {
             connect: connect.then(|| self.address.trim().to_string()),
             speed: Some(self.speed),
             swap_ctrl_cmd: Some(self.swap),
+            edge_delay_ms: Some(self.edge_delay_ms),
+            edge_bar: Some(self.edge_bar),
             data_dir: None,
         }
     }
@@ -149,6 +156,9 @@ pub struct GuiApp {
     perms_checked: Instant,
     paired: usize,
     local_ip: Option<IpAddr>,
+    edge_bar: EdgeBar,
+    /// Where the edge bar goes while the engine runs, if it is on.
+    strip: Option<Strip>,
 }
 
 impl GuiApp {
@@ -170,6 +180,8 @@ impl GuiApp {
             perms: sys::permissions(),
             perms_checked: Instant::now(),
             local_ip: local_ip(),
+            edge_bar: EdgeBar::default(),
+            strip: None,
         }
     }
 
@@ -195,10 +207,14 @@ impl GuiApp {
 
         self.generation += 1;
         let generation = self.generation;
-        let (tx, ctx) = (self.reports_tx.clone(), self.ctx.clone());
-        let report: crate::engine::Reporter = Arc::new(move |r| {
-            let _ = tx.send((generation, r));
-            ctx.request_repaint();
+        let (tx, ctx, bar) = (self.reports_tx.clone(), self.ctx.clone(), self.edge_bar.clone());
+        let report: crate::engine::Reporter = Arc::new(move |r| match r {
+            // Only the bar's own window needs redrawing.
+            Report::Edge(hint) => bar.set(&ctx, hint),
+            r => {
+                let _ = tx.send((generation, r));
+                ctx.request_repaint();
+            }
         });
         let (pin_tx, pin_rx) = mpsc::channel::<Option<String>>();
         let ask_report = report.clone();
@@ -210,6 +226,12 @@ impl GuiApp {
         }));
 
         self.view = View { log: std::mem::take(&mut self.view.log), ..View::default() };
+        // Monitor coordinates are physical pixels on Windows and points elsewhere.
+        let scale =
+            if cfg!(windows) { self.ctx.native_pixels_per_point().unwrap_or(1.0) } else { 1.0 };
+        let screens: Vec<_> = sys::monitors().into_iter().map(|m| m.bounds).collect();
+        self.strip =
+            if settings.edge_bar { Strip::new(&screens, settings.side, scale) } else { None };
         self.running = Some(Running {
             generation,
             engine: Some(Engine::start(settings, pin, report)),
@@ -220,6 +242,8 @@ impl GuiApp {
     fn stop(&mut self) {
         // Dropping stops the engine and waits for it.
         self.running = None;
+        self.strip = None;
+        self.edge_bar.set(&self.ctx, None);
         self.view.link = None;
         self.view.remote = false;
         self.view.show_pin = None;
@@ -262,6 +286,8 @@ impl GuiApp {
                     self.view.link = Some(state);
                 }
                 Report::Remote(on) => self.view.remote = on,
+                // Handled by the reporter itself.
+                Report::Edge(_) => {}
                 Report::ShowPin(pin) => self.view.show_pin = Some(pin),
                 Report::AskPin(addr) => {
                     self.view.ask_pin = Some(addr);
@@ -461,6 +487,18 @@ impl GuiApp {
                 ui.label("Tuşlar");
                 ui.checkbox(&mut form.swap, "Ctrl ile Cmd yer değiştirsin");
                 ui.end_row();
+
+                ui.label("Geçiş");
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut form.edge_delay_ms, 0, "Kenara değince");
+                    ui.radio_value(&mut form.edge_delay_ms, 300, "Kısa itince");
+                    ui.radio_value(&mut form.edge_delay_ms, 600, "Uzun itince");
+                });
+                ui.end_row();
+
+                ui.label("Kenar çubuğu");
+                ui.checkbox(&mut form.edge_bar, "İmleç yaklaşınca kenarda göster");
+                ui.end_row();
             });
         });
     }
@@ -525,11 +563,19 @@ impl eframe::App for GuiApp {
                 self.log_ui(ui);
             });
         });
+        if let (Some(_), Some(strip)) = (&self.running, self.strip) {
+            self.edge_bar.show(ui.ctx(), strip);
+        }
         // Picks up permission changes made in System Settings. Otherwise the
         // window only redraws on input or when the engine reports something.
         if !self.perms.all_granted() {
             ui.ctx().request_repaint_after(Duration::from_secs(1));
         }
+    }
+
+    /// Transparent, for the edge bar's window; the main window is covered by its panel.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0; 4]
     }
 
     /// Quitting (e.g. Cmd+Q) must give keyboard and mouse back first.
