@@ -1,0 +1,10 @@
+[package]
+name = "sc-core"
+description = "Pure decision logic: screen edges, control hand-over, key forwarding"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+sc-keymap.workspace = true
+sc-proto.workspace = true

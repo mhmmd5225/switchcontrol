@@ -1,0 +1,6 @@
+[package]
+name = "sc-keymap"
+description = "Key code translation between USB HID usages, Windows scan codes and macOS key codes"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "win-spike"
+description = "Phase 0 spike: prove Windows capture and injection work"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+sc-platform.workspace = true
+sc-proto.workspace = true
