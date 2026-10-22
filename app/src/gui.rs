@@ -525,8 +525,11 @@ impl eframe::App for GuiApp {
                 self.log_ui(ui);
             });
         });
-        // Picks up permission changes made in System Settings.
-        ui.ctx().request_repaint_after(Duration::from_secs(1));
+        // Picks up permission changes made in System Settings. Otherwise the
+        // window only redraws on input or when the engine reports something.
+        if !self.perms.all_granted() {
+            ui.ctx().request_repaint_after(Duration::from_secs(1));
+        }
     }
 
     /// Quitting (e.g. Cmd+Q) must give keyboard and mouse back first.
