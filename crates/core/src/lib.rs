@@ -70,6 +70,9 @@ pub struct Node {
     controlled: bool,
     injected_keys: BTreeSet<u16>,
     injected_buttons: BTreeSet<MouseButton>,
+    /// A Command key from the Mac, injected here as Ctrl, with nothing else
+    /// pressed since. Released alone, it becomes a Windows key tap.
+    lone_command: Option<u16>,
 }
 
 impl Node {
@@ -87,6 +90,7 @@ impl Node {
             controlled: false,
             injected_keys: BTreeSet::new(),
             injected_buttons: BTreeSet::new(),
+            lone_command: None,
         }
     }
 
@@ -188,20 +192,34 @@ impl Node {
             Message::MouseMove { x, y } => out.push(Action::Inject(InputEvent::MouseMove { x, y })),
             Message::Button { button, down } => {
                 if down {
+                    // Cmd+click is a Ctrl+click, not a Windows key.
+                    self.lone_command = None;
                     self.injected_buttons.insert(button);
                     out.push(Action::Inject(InputEvent::Button { button, down }));
                 } else if self.injected_buttons.remove(&button) {
                     out.push(Action::Inject(InputEvent::Button { button, down }));
                 }
             }
-            Message::Wheel { dx, dy } => out.push(Action::Inject(InputEvent::Wheel { dx, dy })),
-            Message::Key { usage, down } => {
-                let usage = self.remap(usage);
+            Message::Wheel { dx, dy } => {
+                self.lone_command = None;
+                out.push(Action::Inject(InputEvent::Wheel { dx, dy }));
+            }
+            Message::Key { usage: sent, down } => {
+                let usage = self.remap(sent);
+                let command_as_ctrl = usage != sent && self.os == Os::Windows && is_gui(sent);
                 if down {
+                    self.lone_command = command_as_ctrl.then_some(sent);
                     self.injected_keys.insert(usage);
                     out.push(Action::Inject(InputEvent::Key { usage, down }));
                 } else if self.injected_keys.remove(&usage) {
                     out.push(Action::Inject(InputEvent::Key { usage, down }));
+                    // Cmd pressed and released alone: what a Windows key would do.
+                    if self.lone_command.take() == Some(sent) {
+                        out.push(Action::Inject(InputEvent::Key { usage: sent, down: true }));
+                        out.push(Action::Inject(InputEvent::Key { usage: sent, down: false }));
+                    }
+                } else {
+                    self.lone_command = None;
                 }
             }
         }
@@ -292,6 +310,7 @@ impl Node {
     }
 
     fn release_injected(&mut self, out: &mut Vec<Action>) {
+        self.lone_command = None;
         // Ascending order releases modifiers (0xE0..) after ordinary keys.
         for usage in std::mem::take(&mut self.injected_keys) {
             out.push(Action::Inject(InputEvent::Key { usage, down: false }));
@@ -305,6 +324,10 @@ impl Node {
         let cross_os = self.peer.as_ref().is_some_and(|p| p.os != self.os);
         if self.config.swap_ctrl_cmd && cross_os { swap_ctrl_gui(usage) } else { usage }
     }
+}
+
+fn is_gui(usage: u16) -> bool {
+    usage == sc_keymap::usage::LEFT_GUI || usage == sc_keymap::usage::RIGHT_GUI
 }
 
 fn set<T: Ord>(set: &mut BTreeSet<T>, item: T, present: bool) {

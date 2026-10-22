@@ -184,6 +184,67 @@ fn receiver_swaps_ctrl_and_command_across_os() {
     assert_eq!(injected(&actions), vec![key(usage::LEFT_CTRL, true)]);
 }
 
+/// What the PC injects for keys sent by the Mac.
+fn pc_injects(keys: &[(u16, bool)]) -> Vec<InputEvent> {
+    let mut pc = pc();
+    pc.peer_message(Message::Enter { x: 0, y: 0 });
+    keys.iter()
+        .flat_map(|&(usage, down)| injected(&pc.peer_message(Message::Key { usage, down })))
+        .collect()
+}
+
+#[test]
+fn command_alone_is_a_windows_key_on_the_pc() {
+    let actions = pc_injects(&[(usage::LEFT_GUI, true), (usage::LEFT_GUI, false)]);
+    assert_eq!(
+        actions,
+        vec![
+            key(usage::LEFT_CTRL, true),
+            key(usage::LEFT_CTRL, false),
+            key(usage::LEFT_GUI, true),
+            key(usage::LEFT_GUI, false),
+        ]
+    );
+}
+
+#[test]
+fn command_with_another_key_stays_ctrl() {
+    let c = 0x06;
+    let actions =
+        pc_injects(&[(usage::LEFT_GUI, true), (c, true), (c, false), (usage::LEFT_GUI, false)]);
+    assert_eq!(
+        actions,
+        vec![
+            key(usage::LEFT_CTRL, true),
+            key(c, true),
+            key(c, false),
+            key(usage::LEFT_CTRL, false)
+        ]
+    );
+
+    // Cmd+click is a Ctrl+click.
+    let mut pc = pc();
+    pc.peer_message(Message::Enter { x: 0, y: 0 });
+    pc.peer_message(Message::Key { usage: usage::LEFT_GUI, down: true });
+    pc.peer_message(Message::Button { button: MouseButton::Left, down: true });
+    let actions = pc.peer_message(Message::Key { usage: usage::LEFT_GUI, down: false });
+    assert_eq!(injected(&actions), vec![key(usage::LEFT_CTRL, false)]);
+}
+
+#[test]
+fn ctrl_alone_and_the_mac_side_are_unchanged() {
+    // Ctrl from the Mac becomes the Windows key and needs no extra tap.
+    let actions = pc_injects(&[(usage::LEFT_CTRL, true), (usage::LEFT_CTRL, false)]);
+    assert_eq!(actions, vec![key(usage::LEFT_GUI, true), key(usage::LEFT_GUI, false)]);
+
+    // The Windows key alone on the Mac stays a plain Ctrl press.
+    let mut mac = mac();
+    mac.peer_message(Message::Enter { x: 0, y: 0 });
+    let mut actions = mac.peer_message(Message::Key { usage: usage::LEFT_GUI, down: true });
+    actions.extend(mac.peer_message(Message::Key { usage: usage::LEFT_GUI, down: false }));
+    assert_eq!(injected(&actions), vec![key(usage::LEFT_CTRL, true), key(usage::LEFT_CTRL, false)]);
+}
+
 #[test]
 fn receiver_releases_held_keys_on_leave_and_disconnect() {
     for end in [Some(Message::Leave), Some(Message::ReleaseAll), None] {

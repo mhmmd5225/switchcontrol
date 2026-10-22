@@ -60,7 +60,7 @@ switchcontrol --side left --connect 192.168.1.20
 | `--dry-run` | Yakalama ve enjeksiyon yapma, sadece logla |
 | `-v` | Gönderilen ve alınan her mesajı logla |
 
-Windows'tan gelen Ctrl, Mac'te Cmd olur (ve tersi). Tuşlar fiziksel konumlarıyla taşınır, bu yüzden iki makinede de aynı klavye düzeni (ör. Türkçe Q) seçili olmalı.
+Windows'tan gelen Ctrl, Mac'te Cmd olur (ve tersi). Mac klavyesiyle Windows'u kullanırken Cmd tek başına basılıp bırakılırsa Windows tuşu gibi davranır (Başlat menüsü); başka bir tuşla birlikte (Cmd+C) Ctrl olarak kalır. Tuşlar fiziksel konumlarıyla taşınır, bu yüzden iki makinede de aynı klavye düzeni (ör. Türkçe Q) seçili olmalı.
 
 ### Eşleştirme ve güvenlik
 
