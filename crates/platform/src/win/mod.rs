@@ -26,3 +26,8 @@ pub fn init() {
 pub fn secure_input_active() -> bool {
     false
 }
+
+/// Windows needs no permission for hooks or `SendInput`.
+pub fn permissions() -> crate::Permissions {
+    crate::Permissions { listen: true, post: true }
+}

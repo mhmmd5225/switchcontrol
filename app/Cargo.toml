@@ -15,3 +15,7 @@ rcgen.workspace = true
 ring.workspace = true
 rustls.workspace = true
 spake2.workspace = true
+eframe = "0.37"
+
+[dev-dependencies]
+egui_kittest = { version = "0.37", features = ["eframe"] }

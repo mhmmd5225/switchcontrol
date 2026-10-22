@@ -13,3 +13,18 @@ pub struct Monitor {
     pub bounds: Rect,
     pub primary: bool,
 }
+
+/// Whether the OS lets this process see and post input (macOS privacy settings).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Permissions {
+    /// Input Monitoring: needed to capture keyboard and mouse.
+    pub listen: bool,
+    /// Accessibility: needed to post input and to block it while grabbing.
+    pub post: bool,
+}
+
+impl Permissions {
+    pub fn all_granted(self) -> bool {
+        self.listen && self.post
+    }
+}

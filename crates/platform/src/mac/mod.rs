@@ -14,7 +14,7 @@ mod inject;
 pub use capture::Capture;
 pub use inject::Injector;
 
-use crate::{Monitor, Rect};
+use crate::{Monitor, Permissions, Rect};
 
 /// `kCGEventSourceUserData` tag on every event we post, so our tap skips them.
 pub const INJECT_MARKER: i64 = 0x5343_4B56;
@@ -25,6 +25,16 @@ pub fn init() {
     unsafe {
         ffi::CGRequestListenEventAccess();
         ffi::CGRequestPostEventAccess();
+    }
+}
+
+/// Current state of the two privacy permissions, without prompting.
+pub fn permissions() -> Permissions {
+    unsafe {
+        Permissions {
+            listen: ffi::CGPreflightListenEventAccess(),
+            post: ffi::CGPreflightPostEventAccess(),
+        }
     }
 }
 

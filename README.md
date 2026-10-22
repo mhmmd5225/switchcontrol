@@ -2,7 +2,32 @@
 
 Windows ↔ macOS arasında tek klavye ve mouse paylaşımı (ShareMouse benzeri yazılım KVM).
 
-## Kullanım
+## Pencere
+
+Program argümansız açılınca (ör. Finder'dan çift tıklayınca) bir pencere açar. Pencerede:
+
+- **Diğer bilgisayar**: öteki bilgisayar bu ekranın solunda mı sağında mı.
+- **Bağlantı**: bir taraf *Bağlantı bekle*, diğeri *Bağlan* seçer. Bekleyen taraf kendi adresini gösterir, bağlanan taraf bu adresi *Adres* alanına yazar.
+- **Başlat / Durdur**: başlık satırı durumu gösterir (bekleniyor, bağlanılıyor, bağlı, klavye ve fare karşı tarafta).
+- **Eşleştirme**: ilk bağlantıda bekleyen tarafın penceresinde 6 haneli PIN çıkar, bağlanan tarafın penceresinde PIN sorulur.
+- **Günlük**: ayrıntılı kayıtlar.
+
+Ayarlar *Başlat*'a basınca veri klasöründeki `settings.toml` dosyasına kaydedilir (`--config` ile aynı biçim).
+
+### Mac uygulaması
+
+Mac'te depo klasöründe:
+
+```bash
+./scripts/macos-app.sh
+open target/release/SwitchControl.app
+```
+
+Uygulamayı isterseniz Uygulamalar klasörüne sürükleyin. İlk açılışta pencere eksik izinleri gösterir: *Ayarları aç* ile Sistem Ayarları > Gizlilik ve Güvenlik altında **Girdi İzleme** ve **Erişilebilirlik** listelerine SwitchControl'ü ekleyin, sonra uygulamayı kapatıp yeniden açın.
+
+Uygulama yerel (ad hoc) imzalı olduğundan macOS izinleri o derlemeye bağlar: yeniden derledikten sonra SwitchControl'ü iki listeden silip tekrar ekleyin. Terminalden `switchcontrol ...` ile çalıştırırken izinler Terminal uygulamasına aittir.
+
+## Komut satırı
 
 Programı iki bilgisayarda da çalıştırın. Bir taraf bağlantı bekler, diğeri ona bağlanır. `--side` her makinede **diğer bilgisayarın** hangi tarafta durduğunu söyler.
 
@@ -51,12 +76,14 @@ Windows'tan gelen Ctrl, Mac'te Cmd olur (ve tersi). Tuşlar fiziksel konumlarıy
 - Eşleşmemiş bir cihaz, PIN'i bilmeden hiçbir girdi gönderemez veya alamaz.
 - Veriler Windows'ta `%APPDATA%\SwitchControl`, Mac'te `~/Library/Application Support/SwitchControl` altında tutulur: `cert.der`, `key.der` (özel anahtar) ve `trusted-peers.txt`.
 
-**macOS:** ilk çalıştırmada Sistem Ayarları > Gizlilik ve Güvenlik altında *Erişilebilirlik* ve *Girdi İzleme* izinleri verilmeli. Mac tarafı yalnızca Windows'tan derlenip tip kontrolü yapıldı; gerçek Mac'te henüz denenmedi.
+**macOS:** ilk çalıştırmada Sistem Ayarları > Gizlilik ve Güvenlik altında *Erişilebilirlik* ve *Girdi İzleme* izinleri verilmeli.
 
 ## Yapı
 
 ```
-app/               switchcontrol programı: ayarlar, TLS bağlantısı, PIN eşleştirme, ana döngü
+app/               switchcontrol programı: pencere (gui.rs), ana döngü (engine.rs),
+                   ayarlar, TLS bağlantısı, PIN eşleştirme
+scripts/           macos-app.sh: SwitchControl.app paketini üretir
 crates/core/       ekran kenarı, kontrol devri, tuş iletimi (OS'ten bağımsız, testli)
 crates/proto/      ortak tipler ve ağ protokolü
 crates/keymap/     USB HID ↔ Windows scan code ↔ macOS key code tabloları
@@ -71,6 +98,8 @@ Gereksinimler (Windows): Rust `stable-x86_64-pc-windows-msvc` ve Visual Studio B
 ```bash
 cargo test
 ```
+
+Testler pencereyi ekransız çalıştırır (egui_kittest): PIN yazarak eşleştirme, durdurma ve PIN'siz yeniden bağlanma dahil. Linux'ta da derlenir ve çalışır; orada girdi yakalama olmadığından pencere deneme modunda açılır.
 
 macOS platform kodunun tip kontrolü (Windows'ta, önce `rustup target add aarch64-apple-darwin`). Uygulamanın tamamı Windows'tan Mac için kontrol edilemez: `ring` C kodu derliyor ve bunun için Apple araçları gerekiyor.
 

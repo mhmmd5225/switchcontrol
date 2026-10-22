@@ -160,6 +160,8 @@ unsafe extern "C" {
 
     pub fn CGRequestListenEventAccess() -> bool;
     pub fn CGRequestPostEventAccess() -> bool;
+    pub fn CGPreflightListenEventAccess() -> bool;
+    pub fn CGPreflightPostEventAccess() -> bool;
 
     pub fn CGDisplayHideCursor(display: CGDirectDisplayID) -> CGError;
     pub fn CGDisplayShowCursor(display: CGDirectDisplayID) -> CGError;
