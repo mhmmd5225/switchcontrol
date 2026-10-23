@@ -7,15 +7,17 @@
 
 use std::io::{self, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use sc_proto::{Auth, Hello, Message, PROTOCOL_VERSION, read_frame, write_frame};
 
-use crate::AppEvent;
 use crate::config::NetMode;
+use crate::discovery::Listener;
+use crate::engine::AppEvent;
 use crate::identity::{Fingerprint, TrustStore};
 use crate::pairing::{self, Role};
 use crate::tls::{Secure, SecureReader, TlsConfig};
@@ -23,13 +25,25 @@ use crate::tls::{Secure, SecureReader, TlsConfig};
 const PEER_TIMEOUT: Duration = Duration::from_secs(5);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Time the user has to read the PIN on one screen and type it on the other.
-const PAIRING_TIMEOUT: Duration = Duration::from_secs(120);
+pub const PAIRING_TIMEOUT: Duration = Duration::from_secs(120);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const RETRY_DELAY: Duration = Duration::from_secs(2);
 /// Wrong PINs accepted before the listener stops offering pairing.
 const MAX_PAIRING_FAILURES: u32 = 5;
+/// How often an idle listener checks whether it should stop.
+const POLL: Duration = Duration::from_millis(100);
+
+/// What the connection thread is doing between sessions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Waiting {
+    Listening(String),
+    Connecting(String),
+}
 
 pub enum NetEvent {
+    Waiting(Waiting),
+    /// Pairing request: the user must type this PIN on the other computer.
+    ShowPin(String),
     Connected {
         hello: Hello,
         link: Link,
@@ -46,8 +60,17 @@ pub enum NetEvent {
 pub struct NetContext {
     pub tls: TlsConfig,
     pub trust: Arc<Mutex<TrustStore>>,
-    /// PIN from the command line; otherwise the user is asked when needed.
-    pub pin: Option<String>,
+    pub pin: PinSource,
+}
+
+/// Where the connecting side gets the PIN when pairing.
+pub enum PinSource {
+    /// Given up front, e.g. with `--pin`.
+    Fixed(String),
+    /// Typed into the terminal.
+    Console,
+    /// Asked through a callback (the window); `None` means cancelled.
+    Ask(Box<dyn Fn(SocketAddr) -> Option<String> + Send>),
 }
 
 /// Write half of the current connection.
@@ -66,36 +89,121 @@ impl Link {
     }
 }
 
+/// Stops the connection thread and frees the port.
+pub struct NetHandle {
+    shared: Arc<Shared>,
+    thread: Option<JoinHandle<()>>,
+}
+
+struct Shared {
+    stop: AtomicBool,
+    /// Socket of the session in progress, so `stop` can interrupt it.
+    active: Mutex<Option<TcpStream>>,
+}
+
+impl Shared {
+    fn stopping(&self) -> bool {
+        self.stop.load(Ordering::SeqCst)
+    }
+
+    /// Sleeps up to `time`; false if asked to stop meanwhile.
+    fn pause(&self, time: Duration) -> bool {
+        let end = Instant::now() + time;
+        while Instant::now() < end {
+            if self.stopping() {
+                return false;
+            }
+            thread::sleep(POLL.min(end - Instant::now()));
+        }
+        !self.stopping()
+    }
+}
+
+impl NetHandle {
+    /// Ends the current session and the thread. A pending PIN prompt must be
+    /// answered or cancelled first.
+    pub fn stop(mut self) {
+        self.shared.stop.store(true, Ordering::SeqCst);
+        if let Some(stream) = self.shared.active.lock().unwrap().as_ref() {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 /// Starts the connection thread. Binding happens here so a busy port is
 /// reported right away.
-pub fn spawn(mode: NetMode, hello: Hello, ctx: NetContext, tx: Sender<AppEvent>) -> io::Result<()> {
+pub fn spawn(
+    mode: NetMode,
+    hello: Hello,
+    ctx: NetContext,
+    tx: Sender<AppEvent>,
+) -> io::Result<NetHandle> {
     let listener = match &mode {
-        NetMode::Listen(addr) => Some(TcpListener::bind(addr)?),
+        NetMode::Listen(addr) => {
+            let listener = TcpListener::bind(addr)?;
+            listener.set_nonblocking(true)?;
+            Some(listener)
+        }
         NetMode::Connect(_) => None,
     };
-    thread::Builder::new().name("sc-net".into()).spawn(move || {
+    let shared = Arc::new(Shared { stop: AtomicBool::new(false), active: Mutex::new(None) });
+    let thread_shared = shared.clone();
+    let thread = thread::Builder::new().name("sc-net".into()).spawn(move || {
+        let shared = thread_shared;
         let mut pairing_failures = 0;
+        let announce = || {
+            let waiting = match &mode {
+                NetMode::Listen(addr) => Waiting::Listening(addr.clone()),
+                NetMode::Connect(addr) => Waiting::Connecting(addr.clone()),
+            };
+            let _ = tx.send(AppEvent::Net(NetEvent::Waiting(waiting)));
+        };
+        announce();
         loop {
+            if shared.stopping() {
+                return;
+            }
             let (stream, role) = match (&mode, &listener) {
                 (NetMode::Listen(_), Some(listener)) => match listener.accept() {
                     Ok((stream, _)) => (stream, Role::Server),
-                    Err(_) => {
-                        thread::sleep(RETRY_DELAY);
+                    Err(e) => {
+                        let delay =
+                            if e.kind() == io::ErrorKind::WouldBlock { POLL } else { RETRY_DELAY };
+                        if !shared.pause(delay) {
+                            return;
+                        }
                         continue;
                     }
                 },
-                (NetMode::Connect(addr), _) => match connect(addr) {
+                (NetMode::Connect(addr), _) => match connect_any(&candidates(addr, &ctx)) {
                     Ok(stream) => (stream, Role::Client),
                     Err(_) => {
-                        thread::sleep(RETRY_DELAY);
+                        if !shared.pause(RETRY_DELAY) {
+                            return;
+                        }
                         continue;
                     }
                 },
                 _ => unreachable!("listen mode always has a listener"),
             };
+            // macOS hands out accepted sockets in the listener's non-blocking mode.
+            if stream.set_nonblocking(false).is_err() {
+                continue;
+            }
+            *shared.active.lock().unwrap() = stream.try_clone().ok();
+            if shared.stopping() {
+                return;
+            }
 
             let pairing_allowed = pairing_failures < MAX_PAIRING_FAILURES;
             let result = session(stream, role, &hello, &ctx, &tx, pairing_allowed);
+            *shared.active.lock().unwrap() = None;
+            if shared.stopping() {
+                return;
+            }
             let event = match result {
                 Ok(()) => return, // the app has quit
                 Err(e) if e.kind() == io::ErrorKind::PermissionDenied => match role {
@@ -116,12 +224,41 @@ pub fn spawn(mode: NetMode, hello: Hello, ctx: NetContext, tx: Sender<AppEvent>)
             if tx.send(AppEvent::Net(event)).is_err() || fatal {
                 return;
             }
-            if role == Role::Client {
-                thread::sleep(RETRY_DELAY);
+            announce();
+            if role == Role::Client && !shared.pause(RETRY_DELAY) {
+                return;
             }
         }
     })?;
-    Ok(())
+    Ok(NetHandle { shared, thread: Some(thread) })
+}
+
+/// Where to try to connect: the configured address first, then paired
+/// computers heard on the local network (their address may have changed).
+fn candidates(addr: &str, ctx: &NetContext) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if !addr.is_empty() {
+        out.push(addr.to_string());
+    }
+    let trust = ctx.trust.lock().unwrap();
+    for found in Listener::global().peers() {
+        let found_addr = found.addr.to_string();
+        if trust.contains(&found.fingerprint) && !out.contains(&found_addr) {
+            out.push(found_addr);
+        }
+    }
+    out
+}
+
+fn connect_any(addrs: &[String]) -> io::Result<TcpStream> {
+    let mut last = io::Error::new(io::ErrorKind::NotFound, "no paired computer found");
+    for addr in addrs {
+        match connect(addr) {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
 }
 
 fn connect(addr: &str) -> io::Result<TcpStream> {
@@ -179,11 +316,15 @@ fn session(
                     &pin[..3],
                     &pin[3..]
                 ))));
+                let _ = tx.send(AppEvent::Net(NetEvent::ShowPin(pin.clone())));
                 pin
             }
             Role::Client => match &ctx.pin {
-                Some(pin) => pin.clone(),
-                None => prompt_pin(addr)?,
+                PinSource::Fixed(pin) => pin.clone(),
+                PinSource::Console => prompt_pin(addr)?,
+                PinSource::Ask(ask) => ask(addr).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::PermissionDenied, "pairing cancelled")
+                })?,
             },
         };
         pairing::pair(&mut reader, &mut writer, role, &pin, &secure.channel_binding()?)?;

@@ -1,6 +1,7 @@
 //! Input capture.
 //!
-//! A dedicated thread installs `WH_MOUSE_LL` and `WH_KEYBOARD_LL` hooks. Hook
+//! A dedicated thread installs a `WH_MOUSE_LL` hook, and a `WH_KEYBOARD_LL`
+//! hook only while grabbing: keys typed on this machine are never seen. Hook
 //! callbacks must return quickly (Windows silently removes hooks that exceed
 //! `LowLevelHooksTimeout`), so they only push onto a channel.
 //!
@@ -219,7 +220,6 @@ struct HookState {
     tx: Sender<CaptureEvent>,
     shared: Arc<Shared>,
     modifiers: Cell<u8>,
-    cover: HWND,
 }
 
 const MOD_CTRL: u8 = 1;
@@ -232,8 +232,10 @@ thread_local! {
 }
 
 struct Hooks {
+    hinstance: HINSTANCE,
     mouse: HHOOK,
-    keyboard: HHOOK,
+    /// Installed only while grabbing.
+    keyboard: Cell<Option<HHOOK>>,
     cover: HWND,
 }
 
@@ -241,12 +243,28 @@ impl Hooks {
     fn install(tx: Sender<CaptureEvent>, shared: Arc<Shared>) -> Result<Hooks> {
         let hinstance: HINSTANCE = unsafe { GetModuleHandleW(None)? }.into();
         let cover = create_cover(hinstance)?;
-        STATE.set(Some(HookState { tx, shared, modifiers: Cell::new(0), cover }));
+        STATE.set(Some(HookState { tx, shared, modifiers: Cell::new(0) }));
         let mouse =
             unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), Some(hinstance), 0)? };
-        let keyboard =
-            unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), Some(hinstance), 0)? };
-        Ok(Hooks { mouse, keyboard, cover })
+        Ok(Hooks { hinstance, mouse, keyboard: Cell::new(None), cover })
+    }
+
+    fn set_keyboard_hook(&self, on: bool) {
+        match (on, self.keyboard.get()) {
+            (true, None) => {
+                // Keys held before the grab were released by the app.
+                STATE.with_borrow(|s| s.as_ref().map(|s| s.modifiers.set(0)));
+                let hook = unsafe {
+                    SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), Some(self.hinstance), 0)
+                };
+                self.keyboard.set(hook.ok());
+            }
+            (false, Some(hook)) => {
+                let _ = unsafe { UnhookWindowsHookEx(hook) };
+                self.keyboard.set(None);
+            }
+            _ => {}
+        }
     }
 
     fn run_message_loop(&self) {
@@ -254,7 +272,9 @@ impl Hooks {
         unsafe {
             while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
                 if msg.hwnd.0.is_null() && msg.message == WM_SC_GRAB {
-                    if msg.wParam.0 == 1 {
+                    let on = msg.wParam.0 == 1;
+                    self.set_keyboard_hook(on);
+                    if on {
                         begin_grab(self.cover)
                     } else {
                         end_grab(self.cover)
@@ -270,9 +290,9 @@ impl Hooks {
 
 impl Drop for Hooks {
     fn drop(&mut self) {
+        self.set_keyboard_hook(false);
         unsafe {
             let _ = UnhookWindowsHookEx(self.mouse);
-            let _ = UnhookWindowsHookEx(self.keyboard);
             let _ = DestroyWindow(self.cover);
         }
         STATE.set(None);
@@ -370,7 +390,10 @@ fn handle_key(info: &KBDLLHOOKSTRUCT) -> bool {
             && s.modifiers.get() & EMERGENCY_MODS == EMERGENCY_MODS
             && s.shared.grab.swap(false, Ordering::SeqCst);
         if emergency {
-            end_grab(s.cover);
+            // Unhooking is left to the message loop, outside this callback.
+            let _ = unsafe {
+                PostThreadMessageW(GetCurrentThreadId(), WM_SC_GRAB, WPARAM(0), LPARAM(0))
+            };
             let _ = s.tx.send(CaptureEvent::EmergencyRelease);
             // Keep the Esc from reaching the app under the cursor.
             return true;

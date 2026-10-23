@@ -120,7 +120,7 @@ impl Injector {
         let sent = unsafe { SendInput(inputs, size_of::<INPUT>() as i32) };
         // A short count means UIPI blocked us (elevated foreground window) or
         // the input desktop is secure (UAC, lock screen).
-        if sent as usize != inputs.len() { Err(Error::from_win32()) } else { Ok(()) }
+        if sent as usize != inputs.len() { Err(Error::from_thread()) } else { Ok(()) }
     }
 }
 

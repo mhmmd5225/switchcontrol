@@ -1,4 +1,6 @@
-//! Input capture through a session-level CGEventTap on a dedicated run loop.
+//! Input capture through session-level CGEventTaps on a dedicated run loop:
+//! one for the mouse, and one for the keyboard that is enabled only while
+//! grabbing, so keys typed on this machine are never seen.
 //!
 //! While grabbing, the tap drops every event and the cursor is detached from
 //! the mouse (`CGAssociateMouseAndMouseCursorPosition(false)`) and hidden, so
@@ -26,14 +28,28 @@ pub struct Capture {
 struct Shared {
     grab: AtomicBool,
     stop: AtomicBool,
+    /// The keyboard tap, enabled only while grabbing.
+    key_port: AtomicPtr<c_void>,
+}
+
+impl Shared {
+    fn enable_keys(&self, on: bool) {
+        let port = self.key_port.load(Ordering::SeqCst);
+        if !port.is_null() {
+            unsafe { CGEventTapEnable(port, on) };
+        }
+    }
 }
 
 impl Capture {
     pub fn start() -> io::Result<(Capture, Receiver<CaptureEvent>)> {
         let (tx, rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::channel();
-        let shared =
-            Arc::new(Shared { grab: AtomicBool::new(false), stop: AtomicBool::new(false) });
+        let shared = Arc::new(Shared {
+            grab: AtomicBool::new(false),
+            stop: AtomicBool::new(false),
+            key_port: AtomicPtr::new(ptr::null_mut()),
+        });
         let thread_shared = shared.clone();
         allow_background_cursor_control();
 
@@ -47,6 +63,7 @@ impl Capture {
 
     pub fn set_grab(&self, on: bool) {
         if self.shared.grab.swap(on, Ordering::SeqCst) != on {
+            self.shared.enable_keys(on);
             set_cursor_detached(on);
         }
     }
@@ -114,7 +131,7 @@ fn run_tap(tx: Sender<CaptureEvent>, shared: Arc<Shared>, ready: Sender<io::Resu
         scroll_rest: Cell::new((0, 0)),
     }));
 
-    let types = [
+    let mouse_types = [
         kCGEventLeftMouseDown,
         kCGEventLeftMouseUp,
         kCGEventRightMouseDown,
@@ -122,27 +139,33 @@ fn run_tap(tx: Sender<CaptureEvent>, shared: Arc<Shared>, ready: Sender<io::Resu
         kCGEventMouseMoved,
         kCGEventLeftMouseDragged,
         kCGEventRightMouseDragged,
-        kCGEventKeyDown,
-        kCGEventKeyUp,
-        kCGEventFlagsChanged,
         kCGEventScrollWheel,
         kCGEventOtherMouseDown,
         kCGEventOtherMouseUp,
         kCGEventOtherMouseDragged,
     ];
-    let mask = types.iter().fold(0u64, |m, &t| m | (1 << t));
-
-    let port = unsafe {
+    let key_types = [kCGEventKeyDown, kCGEventKeyUp, kCGEventFlagsChanged];
+    let mask = |types: &[CGEventType]| types.iter().fold(0u64, |m, &t| m | (1 << t));
+    let create = |types: &[CGEventType]| unsafe {
         CGEventTapCreate(
             kCGSessionEventTap,
             kCGHeadInsertEventTap,
             kCGEventTapOptionDefault,
-            mask,
+            mask(types),
             tap_callback,
             state.cast(),
         )
     };
-    if port.is_null() {
+
+    let port = create(&mouse_types);
+    let key_port = if port.is_null() { ptr::null_mut() } else { create(&key_types) };
+    if port.is_null() || key_port.is_null() {
+        if !port.is_null() {
+            unsafe {
+                CFMachPortInvalidate(port);
+                CFRelease(port.cast_const());
+            }
+        }
         drop(unsafe { Box::from_raw(state) });
         let _ = ready.send(Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -152,11 +175,16 @@ fn run_tap(tx: Sender<CaptureEvent>, shared: Arc<Shared>, ready: Sender<io::Resu
         return;
     }
     unsafe { (*state).port.store(port, Ordering::SeqCst) };
+    shared.key_port.store(key_port, Ordering::SeqCst);
 
     unsafe {
         let source = CFMachPortCreateRunLoopSource(ptr::null(), port, 0);
+        let key_source = CFMachPortCreateRunLoopSource(ptr::null(), key_port, 0);
         CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), key_source, kCFRunLoopCommonModes);
         CGEventTapEnable(port, true);
+        // A grab may already have started.
+        shared.enable_keys(shared.grab.load(Ordering::SeqCst));
         let _ = ready.send(Ok(()));
 
         // Short slices so Drop can stop us without racing CFRunLoopStop.
@@ -164,10 +192,15 @@ fn run_tap(tx: Sender<CaptureEvent>, shared: Arc<Shared>, ready: Sender<io::Resu
             CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.25, 0);
         }
 
+        shared.key_port.store(ptr::null_mut(), Ordering::SeqCst);
         CGEventTapEnable(port, false);
+        CGEventTapEnable(key_port, false);
         CFMachPortInvalidate(port);
+        CFMachPortInvalidate(key_port);
         CFRelease(source.cast_const());
+        CFRelease(key_source.cast_const());
         CFRelease(port.cast_const());
+        CFRelease(key_port.cast_const());
         drop(Box::from_raw(state));
     }
 }
@@ -180,12 +213,14 @@ unsafe extern "C" fn tap_callback(
 ) -> CGEventRef {
     let state = unsafe { &*(user_info as *const TapState) };
 
-    // macOS disables slow taps; turn ourselves back on.
+    // macOS disables slow taps; turn ourselves back on (the keyboard tap
+    // only while grabbing).
     if ty == kCGEventTapDisabledByTimeout || ty == kCGEventTapDisabledByUserInput {
         let port = state.port.load(Ordering::SeqCst);
         if !port.is_null() {
             unsafe { CGEventTapEnable(port, true) };
         }
+        state.shared.enable_keys(state.shared.grab.load(Ordering::SeqCst));
         return event;
     }
     if unsafe { CGEventGetIntegerValueField(event, kCGEventSourceUserData) } == INJECT_MARKER {
@@ -196,6 +231,7 @@ unsafe extern "C" fn tap_callback(
     if grabbing && ty == kCGEventKeyDown && is_emergency(event) {
         // swap: only the winner of a race with set_grab(false) shows the cursor.
         if state.shared.grab.swap(false, Ordering::SeqCst) {
+            state.shared.enable_keys(false);
             set_cursor_detached(false);
         }
         let _ = state.tx.send(CaptureEvent::EmergencyRelease);

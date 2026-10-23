@@ -26,6 +26,14 @@ impl Fingerprint {
         Fingerprint(out)
     }
 
+    pub fn bytes(self) -> [u8; 32] {
+        self.0
+    }
+
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Fingerprint(bytes)
+    }
+
     fn to_hex(self) -> String {
         self.0.iter().map(|b| format!("{b:02x}")).collect()
     }
@@ -123,6 +131,10 @@ impl TrustStore {
 
     pub fn len(&self) -> usize {
         self.peers.len()
+    }
+
+    pub fn fingerprints(&self) -> Vec<Fingerprint> {
+        self.peers.iter().map(|(fp, _)| *fp).collect()
     }
 
     fn save(&self) -> io::Result<()> {

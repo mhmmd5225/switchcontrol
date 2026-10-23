@@ -1,10 +1,11 @@
 //! Settings from an optional TOML file, overridden by command-line flags.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use sc_core::Side;
 use sc_proto::DEFAULT_PORT;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::identity;
 use crate::pairing::normalize_pin;
@@ -18,6 +19,9 @@ usage: switchcontrol --side left|right [--listen ADDR | --connect ADDR] [options
   --name NAME         name shown to the peer (default: computer name)
   --speed F           pointer speed on the peer (default 1.0)
   --no-swap           keep Ctrl and Cmd/Win as they are
+  --edge-delay MS     push against the edge this long before crossing (default 0)
+  --no-clipboard      do not share clipboard text with the other computer
+  --no-announce       do not make this computer visible on the local network
   --config FILE       read these settings from a TOML file (flags win)
   --pin PIN           PIN for pairing, instead of typing it when asked
   --data-dir DIR      where this computer's certificate and paired peers live
@@ -43,6 +47,11 @@ pub struct Settings {
     pub net: NetMode,
     pub swap_ctrl_cmd: bool,
     pub speed: f64,
+    pub edge_delay: Duration,
+    /// Share clipboard text when control passes between the computers.
+    pub clipboard: bool,
+    /// While listening, announce this computer on the local network.
+    pub announce: bool,
     pub pin: Option<String>,
     pub data_dir: PathBuf,
     pub forget_peers: bool,
@@ -52,25 +61,36 @@ pub struct Settings {
 
 /// The TOML file uses the long flag names, e.g. `side = "right"`.
 /// The PIN is deliberately not accepted from the file.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
-struct FileConfig {
-    name: Option<String>,
-    side: Option<String>,
-    listen: Option<String>,
-    connect: Option<String>,
-    speed: Option<f64>,
-    swap_ctrl_cmd: Option<bool>,
-    data_dir: Option<PathBuf>,
+pub struct FileConfig {
+    pub name: Option<String>,
+    pub side: Option<String>,
+    pub listen: Option<String>,
+    pub connect: Option<String>,
+    pub speed: Option<f64>,
+    pub swap_ctrl_cmd: Option<bool>,
+    pub edge_delay_ms: Option<u64>,
+    pub clipboard: Option<bool>,
+    pub announce: Option<bool>,
+    /// Draw a bar at the shared edge when the cursor comes near (window only).
+    pub edge_bar: Option<bool>,
+    pub data_dir: Option<PathBuf>,
+}
+
+/// Switches that only exist for one run, never in a file.
+#[derive(Debug, Default, Clone)]
+pub struct RunFlags {
+    pub pin: Option<String>,
+    pub forget_peers: bool,
+    pub dry_run: bool,
+    pub verbose: bool,
 }
 
 pub fn from_args(args: &[String]) -> Result<Settings, String> {
     let mut file = FileConfig::default();
     let mut cli = FileConfig::default();
-    let mut pin = None;
-    let mut forget_peers = false;
-    let mut dry_run = false;
-    let mut verbose = false;
+    let mut flags = RunFlags::default();
 
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -85,72 +105,130 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
                 cli.speed = Some(raw.parse().map_err(|_| format!("--speed: not a number: {raw}"))?);
             }
             "--no-swap" => cli.swap_ctrl_cmd = Some(false),
-            "--config" => file = read_file(PathBuf::from(value()?))?,
+            "--no-clipboard" => cli.clipboard = Some(false),
+            "--no-announce" => cli.announce = Some(false),
+            "--edge-delay" => {
+                let raw = value()?;
+                cli.edge_delay_ms = Some(
+                    raw.parse().map_err(|_| format!("--edge-delay: not milliseconds: {raw}"))?,
+                );
+            }
+            "--config" => file = load(Path::new(&value()?))?,
             "--pin" => {
                 let raw = value()?;
-                pin =
+                flags.pin =
                     Some(normalize_pin(&raw).ok_or_else(|| format!("--pin: not 6 digits: {raw}"))?);
             }
             "--data-dir" => cli.data_dir = Some(PathBuf::from(value()?)),
-            "--forget-peers" => forget_peers = true,
-            "--dry-run" => dry_run = true,
-            "-v" | "--verbose" => verbose = true,
+            "--forget-peers" => flags.forget_peers = true,
+            "--dry-run" => flags.dry_run = true,
+            "-v" | "--verbose" => flags.verbose = true,
             "-h" | "--help" => return Err(String::new()),
             other => return Err(format!("unknown argument: {other}")),
         }
     }
 
-    let side = match cli.side.or(file.side).as_deref() {
-        Some("left") => Side::Left,
-        Some("right") => Side::Right,
-        Some(other) => return Err(format!("side must be left or right, not {other}")),
-        None => return Err("--side is required".into()),
-    };
     // A flag of either kind beats the file; listen and connect exclude each other.
     let (listen, connect) = if cli.listen.is_some() || cli.connect.is_some() {
         (cli.listen, cli.connect)
     } else {
         (file.listen, file.connect)
     };
-    let net = match (listen, connect) {
+    let merged = FileConfig {
+        name: cli.name.or(file.name),
+        side: cli.side.or(file.side),
+        listen,
+        connect,
+        speed: cli.speed.or(file.speed),
+        swap_ctrl_cmd: cli.swap_ctrl_cmd.or(file.swap_ctrl_cmd),
+        edge_delay_ms: cli.edge_delay_ms.or(file.edge_delay_ms),
+        clipboard: cli.clipboard.or(file.clipboard),
+        announce: cli.announce.or(file.announce),
+        edge_bar: file.edge_bar,
+        data_dir: cli.data_dir.or(file.data_dir),
+    };
+    resolve(merged, flags)
+}
+
+/// Checks a configuration and fills in the defaults.
+pub fn resolve(config: FileConfig, flags: RunFlags) -> Result<Settings, String> {
+    let side = match config.side.as_deref() {
+        Some("left") => Side::Left,
+        Some("right") => Side::Right,
+        Some(other) => return Err(format!("side must be left or right, not {other}")),
+        None => return Err("--side is required".into()),
+    };
+    let net = match (config.listen, config.connect) {
         (Some(_), Some(_)) => return Err("use either --listen or --connect, not both".into()),
         (_, Some(addr)) => NetMode::Connect(with_port(addr)),
         (Some(addr), None) => NetMode::Listen(with_port(addr)),
         (None, None) => NetMode::Listen(format!("0.0.0.0:{DEFAULT_PORT}")),
     };
-    let speed = cli.speed.or(file.speed).unwrap_or(1.0);
+    let speed = config.speed.unwrap_or(1.0);
     if !(speed > 0.0 && speed <= 10.0) {
         return Err(format!("speed must be in (0, 10], not {speed}"));
     }
+    let edge_delay_ms = config.edge_delay_ms.unwrap_or(0);
+    if edge_delay_ms > 5000 {
+        return Err(format!("edge delay must be at most 5000 ms, not {edge_delay_ms}"));
+    }
 
     Ok(Settings {
-        name: cli.name.or(file.name).unwrap_or_else(default_name),
+        name: config.name.filter(|n| !n.trim().is_empty()).unwrap_or_else(default_name),
         side,
         net,
-        swap_ctrl_cmd: cli.swap_ctrl_cmd.or(file.swap_ctrl_cmd).unwrap_or(true),
+        swap_ctrl_cmd: config.swap_ctrl_cmd.unwrap_or(true),
         speed,
-        pin,
-        data_dir: cli.data_dir.or(file.data_dir).unwrap_or_else(identity::default_dir),
-        forget_peers,
-        dry_run,
-        verbose,
+        edge_delay: Duration::from_millis(edge_delay_ms),
+        clipboard: config.clipboard.unwrap_or(true),
+        announce: config.announce.unwrap_or(true),
+        pin: flags.pin,
+        data_dir: config.data_dir.unwrap_or_else(identity::default_dir),
+        forget_peers: flags.forget_peers,
+        dry_run: flags.dry_run,
+        verbose: flags.verbose,
     })
 }
 
-fn read_file(path: PathBuf) -> Result<FileConfig, String> {
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+pub fn load(path: &Path) -> Result<FileConfig, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-fn with_port(addr: String) -> String {
-    if addr.contains(':') { addr } else { format!("{addr}:{DEFAULT_PORT}") }
+pub fn save(path: &Path, config: &FileConfig) -> Result<(), String> {
+    let text = toml::to_string(config).map_err(|e| e.to_string())?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-fn default_name() -> String {
+/// Adds the default port. An empty address stays empty: it means "find a
+/// paired computer on the network".
+fn with_port(addr: String) -> String {
+    let addr = addr.trim().to_string();
+    if addr.is_empty() || addr.contains(':') { addr } else { format!("{addr}:{DEFAULT_PORT}") }
+}
+
+pub fn default_name() -> String {
     ["COMPUTERNAME", "HOSTNAME"]
         .iter()
         .find_map(|var| std::env::var(var).ok())
+        .or_else(host_name)
         .unwrap_or_else(|| "switchcontrol".into())
+}
+
+/// macOS does not export `HOSTNAME` to apps started from Finder.
+#[cfg(unix)]
+fn host_name() -> Option<String> {
+    let out = std::process::Command::new("hostname").arg("-s").output().ok()?;
+    let name = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+#[cfg(not(unix))]
+fn host_name() -> Option<String> {
+    None
 }
 
 #[cfg(test)]
@@ -168,12 +246,16 @@ mod tests {
         assert_eq!(s.side, Side::Right);
         assert_eq!(s.net, NetMode::Listen("0.0.0.0:24800".into()));
         assert!(s.swap_ctrl_cmd);
+        assert!(s.clipboard);
         assert_eq!(s.speed, 1.0);
+        assert!(!parse("--side right --no-clipboard").unwrap().clipboard);
     }
 
     #[test]
     fn connect_adds_default_port() {
-        let s = parse("--side left --connect 192.168.1.20 --no-swap --speed 1.5").unwrap();
+        let s = parse("--side left --connect 192.168.1.20 --no-swap --speed 1.5 --edge-delay 300")
+            .unwrap();
+        assert_eq!(s.edge_delay, Duration::from_millis(300));
         assert_eq!(s.net, NetMode::Connect("192.168.1.20:24800".into()));
         assert!(!s.swap_ctrl_cmd);
         assert_eq!(s.speed, 1.5);
@@ -194,6 +276,8 @@ mod tests {
         assert!(parse("--side up").is_err());
         assert!(parse("--side left --listen :1 --connect x").is_err());
         assert!(parse("--side left --speed 0").is_err());
+        assert!(parse("--side left --edge-delay 9000").is_err());
+        assert!(parse("--side left --edge-delay -1").is_err());
         assert!(parse("--side left --bogus").is_err());
     }
 
@@ -206,5 +290,21 @@ mod tests {
         assert_eq!(s.side, Side::Left);
         assert_eq!(s.net, NetMode::Connect("10.0.0.5:24800".into()));
         assert_eq!(s.speed, 0.5);
+    }
+
+    #[test]
+    fn saved_file_round_trips() {
+        let path = std::env::temp_dir().join(format!("sc-save-{}.toml", std::process::id()));
+        let config = FileConfig {
+            side: Some("left".into()),
+            connect: Some("10.0.0.5".into()),
+            speed: Some(1.5),
+            swap_ctrl_cmd: Some(false),
+            ..FileConfig::default()
+        };
+        save(&path, &config).unwrap();
+        let loaded = load(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(loaded, config);
     }
 }

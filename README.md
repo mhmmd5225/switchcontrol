@@ -2,7 +2,48 @@
 
 Windows ↔ macOS arasında tek klavye ve mouse paylaşımı (ShareMouse benzeri yazılım KVM).
 
-## Kullanım
+## Hazır dosyalar
+
+Her gönderimde GitHub Actions programı gerçek Mac ve Windows makinelerinde derleyip test eder. Hazır dosyalar: GitHub'da depo > **Actions** > son yeşil çalışma > **Artifacts** (`SwitchControl-macOS`, `SwitchControl-Windows`). `v` ile başlayan bir sürüm etiketi (ör. `v0.2.0`) gönderilince aynı dosyalar **Releases** sayfasına da eklenir.
+
+- **Mac** (yalnızca Apple Silicon / M serisi): zip'i açın. Uygulama yerel imzalı ve internetten indirildiği için macOS ilk açılışı engeller: Finder'da sağ tık > **Aç** deyin ya da Terminal'de `xattr -dr com.apple.quarantine SwitchControl.app` çalıştırın. Her yeni sürümde Girdi İzleme ve Erişilebilirlik izinlerini yeniden verin (eski kaydı silip yenisini ekleyin).
+- **Windows**: zip'ten `switchcontrol.exe`'yi çıkarın. Çift tıklayınca yalnızca pencere açılır, arkada konsol açılmaz. Terminalden argümanla çalıştırınca (`switchcontrol --side right ...`) çıktı o terminale yazılır; ancak terminal programın bitmesini beklemediği için eşleştirme PIN'ini `--pin` ile verin. "Windows bilgisayarınızı korudu" uyarısı çıkarsa **Ek bilgi > Yine de çalıştır**.
+
+## Pencere
+
+Program argümansız açılınca (ör. Finder'dan çift tıklayınca) bir pencere açar. Pencerede:
+
+- **Diğer bilgisayar**: öteki bilgisayar bu ekranın solunda mı sağında mı.
+- **Bağlantı**: bir taraf *Bağlantı bekle*, diğeri *Bağlan* seçer. Bekleyen taraf kendini yerel ağda duyurur; bağlanan tarafta *Ağda bulunanlar* listesinde görünür, *Seç* ile adresi dolar (ya da adres elle yazılır). Eşleşmiş bir bilgisayar için adres boş bırakılabilir: IP'si değişse de ağda bulunup kendiliğinden bağlanılır. Bekleyen tarafta *Ağda görünür ol* kapatılırsa duyuru yapılmaz.
+- **Başlat / Durdur**: başlık satırı durumu gösterir (bekleniyor, bağlanılıyor, bağlı, klavye ve fare karşı tarafta).
+- **Geçiş**: *Kenara değince* hemen geçer; *Kısa itince* / *Uzun itince* imlecin kenara 0,3 / 0,6 saniye itilmesini bekler (kenardaki kaydırma çubuğu ve düğmelerde yanlışlıkla geçmeyi önler).
+- **Pano paylaşımı**: imleç diğer bilgisayara geçerken kopyalanan metin de oraya aktarılır; geri dönerken o tarafta kopyalanan metin geri gelir (en fazla 1 MB, yalnızca metin).
+- **Kenar çubuğu**: imleç diğer bilgisayara açılan kenara yaklaşınca orada parlayan bir çubuk belirir; itildikçe ortadan dolar. Çubuk tıklamaları engellemez.
+- **Eşleştirme**: ilk bağlantıda bekleyen tarafın penceresinde 6 haneli PIN çıkar, bağlanan tarafın penceresinde PIN sorulur.
+- **Günlük**: ayrıntılı kayıtlar.
+
+Ayarlar *Başlat*'a basınca veri klasöründeki `settings.toml` dosyasına kaydedilir (`--config` ile aynı biçim).
+
+### Simge ve otomatik başlama
+
+Windows'ta bildirim alanında, Mac'te menü çubuğunda bir SwitchControl simgesi durur. Menüsünde durum, *Başlat/Durdur*, *Pencereyi göster* ve *Çıkış* vardır (Windows'ta simgeye sol tıklamak pencereyi açar). Pencereyi kapatmak programı kapatmaz, simgeye indirir; programdan çıkmak için simgenin menüsünden *Çıkış*'ı seçin.
+
+*Uygulama > Oturum açılınca başlat* açıksa SwitchControl oturum açılınca simge olarak başlar ve kayıtlı ayarlarla bağlanır. Windows'ta kullanıcının başlangıç kaydına (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`), Mac'te `~/Library/LaunchAgents/com.switchcontrol.app.plist` dosyasına yazılır. Uygulamayı başka bir klasöre taşırsanız anahtarı kapatıp yeniden açın.
+
+### Mac uygulaması
+
+Mac'te depo klasöründe:
+
+```bash
+./scripts/macos-app.sh
+open target/release/SwitchControl.app
+```
+
+Uygulamayı isterseniz Uygulamalar klasörüne sürükleyin. İlk açılışta pencere eksik izinleri gösterir: *Ayarları aç* ile Sistem Ayarları > Gizlilik ve Güvenlik altında **Girdi İzleme** ve **Erişilebilirlik** listelerine SwitchControl'ü ekleyin, sonra uygulamayı kapatıp yeniden açın.
+
+Uygulama yerel (ad hoc) imzalı olduğundan macOS izinleri o derlemeye bağlar: yeniden derledikten sonra SwitchControl'ü iki listeden silip tekrar ekleyin. Terminalden `switchcontrol ...` ile çalıştırırken izinler Terminal uygulamasına aittir.
+
+## Komut satırı
 
 Programı iki bilgisayarda da çalıştırın. Bir taraf bağlantı bekler, diğeri ona bağlanır. `--side` her makinede **diğer bilgisayarın** hangi tarafta durduğunu söyler.
 
@@ -28,6 +69,9 @@ switchcontrol --side left --connect 192.168.1.20
 | `--name NAME` | Karşıya gösterilen ad (varsayılan bilgisayar adı) |
 | `--speed F` | Karşı ekrandaki imleç hızı çarpanı (varsayılan 1.0) |
 | `--no-swap` | Ctrl ↔ Cmd/Win değişimini kapat |
+| `--no-clipboard` | Pano paylaşımını kapat |
+| `--no-announce` | Bekleyen tarafta kendini yerel ağda duyurma |
+| `--edge-delay MS` | Geçmeden önce imlecin kenara bu kadar milisaniye itilmesini bekle (varsayılan 0) |
 | `--config FILE` | Aynı ayarları TOML dosyasından oku (`side = "right"`, `connect = "..."`); komut satırı önceliklidir |
 | `--pin PIN` | Eşleştirme PIN'i; verilmezse gerektiğinde sorulur |
 | `--data-dir DIR` | Sertifika ve eşleşmiş bilgisayarların tutulduğu klasör |
@@ -35,7 +79,15 @@ switchcontrol --side left --connect 192.168.1.20
 | `--dry-run` | Yakalama ve enjeksiyon yapma, sadece logla |
 | `-v` | Gönderilen ve alınan her mesajı logla |
 
-Windows'tan gelen Ctrl, Mac'te Cmd olur (ve tersi). Tuşlar fiziksel konumlarıyla taşınır, bu yüzden iki makinede de aynı klavye düzeni (ör. Türkçe Q) seçili olmalı.
+Windows'tan gelen Ctrl, Mac'te Cmd olur (ve tersi). Mac klavyesiyle Windows'u kullanırken Cmd tek başına basılıp bırakılırsa Windows tuşu gibi davranır (Başlat menüsü); başka bir tuşla birlikte (Cmd+C) Ctrl olarak kalır. Tuşlar fiziksel konumlarıyla taşınır, bu yüzden iki makinede de aynı klavye düzeni (ör. Türkçe Q) seçili olmalı.
+
+### Gizlilik
+
+Ağda duyuru (UDP 24800, 2 saniyede bir) bilgisayarın adını, işletim sistemini, portunu ve sertifika parmak izini içerir; yalnızca bir ipucudur, bağlantıda kimlik yine TLS ve eşleşme listesiyle doğrulanır. Windows ilk seferde UDP için de güvenlik duvarı izni isteyebilir.
+
+Pano yalnızca imleç bilgisayarlar arasında geçerken ve yalnızca şifreli bağlantı üzerinden gönderilir; günlüğe metnin kendisi değil yalnızca uzunluğu yazılır. *Pano paylaşımı* anahtarı kapalı olan taraf pano göndermez ve almaz.
+
+Kontrol kendi bilgisayarınızdayken program klavyeyi hiç dinlemez; yalnızca kenarı bulmak için imleç konumunu izler ve bunu ağa göndermez. Klavye ve fare yalnızca imleç diğer bilgisayara geçtiğinde yakalanıp şifreli olarak gönderilir.
 
 ### Eşleştirme ve güvenlik
 
@@ -51,12 +103,14 @@ Windows'tan gelen Ctrl, Mac'te Cmd olur (ve tersi). Tuşlar fiziksel konumlarıy
 - Eşleşmemiş bir cihaz, PIN'i bilmeden hiçbir girdi gönderemez veya alamaz.
 - Veriler Windows'ta `%APPDATA%\SwitchControl`, Mac'te `~/Library/Application Support/SwitchControl` altında tutulur: `cert.der`, `key.der` (özel anahtar) ve `trusted-peers.txt`.
 
-**macOS:** ilk çalıştırmada Sistem Ayarları > Gizlilik ve Güvenlik altında *Erişilebilirlik* ve *Girdi İzleme* izinleri verilmeli. Mac tarafı yalnızca Windows'tan derlenip tip kontrolü yapıldı; gerçek Mac'te henüz denenmedi.
+**macOS:** ilk çalıştırmada Sistem Ayarları > Gizlilik ve Güvenlik altında *Erişilebilirlik* ve *Girdi İzleme* izinleri verilmeli.
 
 ## Yapı
 
 ```
-app/               switchcontrol programı: ayarlar, TLS bağlantısı, PIN eşleştirme, ana döngü
+app/               switchcontrol programı: pencere (gui.rs), ana döngü (engine.rs),
+                   ayarlar, TLS bağlantısı, PIN eşleştirme
+scripts/           macos-app.sh: SwitchControl.app paketini üretir
 crates/core/       ekran kenarı, kontrol devri, tuş iletimi (OS'ten bağımsız, testli)
 crates/proto/      ortak tipler ve ağ protokolü
 crates/keymap/     USB HID ↔ Windows scan code ↔ macOS key code tabloları
@@ -71,6 +125,8 @@ Gereksinimler (Windows): Rust `stable-x86_64-pc-windows-msvc` ve Visual Studio B
 ```bash
 cargo test
 ```
+
+Testler pencereyi ekransız çalıştırır (egui_kittest): PIN yazarak eşleştirme, durdurma ve PIN'siz yeniden bağlanma dahil. Linux'ta da derlenir ve çalışır; orada girdi yakalama olmadığından pencere deneme modunda açılır.
 
 macOS platform kodunun tip kontrolü (Windows'ta, önce `rustup target add aarch64-apple-darwin`). Uygulamanın tamamı Windows'tan Mac için kontrol edilemez: `ring` C kodu derliyor ve bunun için Apple araçları gerekiyor.
 

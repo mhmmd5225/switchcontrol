@@ -17,6 +17,10 @@ pub type CGEventType = u32;
 pub type CGEventField = u32;
 pub type CGEventFlags = u64;
 pub type CGError = i32;
+pub type CGEventSourceStateID = i32;
+
+pub const kCGEventSourceStateCombinedSessionState: CGEventSourceStateID = 0;
+pub const kCGEventSourceStateHIDSystemState: CGEventSourceStateID = 1;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -160,6 +164,9 @@ unsafe extern "C" {
 
     pub fn CGRequestListenEventAccess() -> bool;
     pub fn CGRequestPostEventAccess() -> bool;
+    pub fn CGPreflightListenEventAccess() -> bool;
+    pub fn CGEventSourceKeyState(state: CGEventSourceStateID, key: u16) -> bool;
+    pub fn CGPreflightPostEventAccess() -> bool;
 
     pub fn CGDisplayHideCursor(display: CGDirectDisplayID) -> CGError;
     pub fn CGDisplayShowCursor(display: CGDirectDisplayID) -> CGError;

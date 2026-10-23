@@ -11,12 +11,14 @@
 mod layout;
 
 use std::collections::BTreeSet;
+use std::time::{Duration, Instant};
 
 use sc_keymap::swap_ctrl_gui;
 use sc_proto::{Hello, InputEvent, Message, MouseButton, Os, PROTOCOL_VERSION, Rect};
 
 pub use layout::Side;
-use layout::{clamp_to_screens, edge_span, edge_x, map_span, on_edge};
+use layout::{clamp_to_screens, map_span, on_edge};
+pub use layout::{edge_span, edge_x};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -26,14 +28,45 @@ pub struct Config {
     pub swap_ctrl_cmd: bool,
     /// Multiplier for motion sent to the peer.
     pub speed: f64,
+    /// How long the cursor must keep pushing against the edge before control
+    /// passes to the peer; zero crosses on touch.
+    pub edge_delay: Duration,
+}
+
+/// Distance from the shared edge (in screen units) at which the edge bar starts to show.
+pub const EDGE_NEAR: i32 = 64;
+/// Steps in which [`EdgeHint`] values change, so the bar is not redrawn on every move.
+pub const EDGE_STEPS: u8 = 10;
+
+/// The part of the shared edge the cursor is near, for drawing a bar there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdgeHint {
+    pub side: Side,
+    /// The outermost pixel column on that side.
+    pub x: i32,
+    /// Vertical extent of the monitor the cursor is on.
+    pub top: i32,
+    pub bottom: i32,
+    /// How close the cursor is, from 1 (just in range) to [`EDGE_STEPS`] (touching).
+    pub near: u8,
+    /// How far a push against the edge has got, 0 to [`EDGE_STEPS`].
+    pub push: u8,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Send(Message),
     Inject(InputEvent),
-    /// Start or stop swallowing local input.
+    /// Start or stop swallowing local input. Starting must also release, on
+    /// this machine, whatever keys are held at that moment: their key-ups
+    /// will be swallowed.
     Grab(bool),
+    /// Show the edge bar, or hide it.
+    Edge(Option<EdgeHint>),
+    /// Control passes to the peer: send it this machine's clipboard text.
+    ShareClipboard,
+    /// The peer shared its clipboard text: put it on this machine's clipboard.
+    SetClipboard(String),
     Log(String),
 }
 
@@ -61,15 +94,21 @@ pub struct Node {
     screens: Vec<Rect>,
     peer: Option<Peer>,
     mode: Mode,
-    /// Physical keys and buttons currently held on this machine.
-    local_keys: BTreeSet<u16>,
+    /// Physical buttons currently held on this machine.
     local_buttons: BTreeSet<MouseButton>,
+    /// Since when the cursor has been pushing against the shared edge.
+    edge_since: Option<Instant>,
+    /// The edge bar as last reported.
+    edge_hint: Option<EdgeHint>,
     /// Buttons we pressed on the peer and have not released yet.
     forwarded_buttons: BTreeSet<MouseButton>,
     /// Whether the peer is currently driving this machine.
     controlled: bool,
     injected_keys: BTreeSet<u16>,
     injected_buttons: BTreeSet<MouseButton>,
+    /// A Command key from the Mac, injected here as Ctrl, with nothing else
+    /// pressed since. Released alone, it becomes a Windows key tap.
+    lone_command: Option<u16>,
 }
 
 impl Node {
@@ -81,12 +120,14 @@ impl Node {
             screens,
             peer: None,
             mode: Mode::Local,
-            local_keys: BTreeSet::new(),
             local_buttons: BTreeSet::new(),
+            edge_since: None,
+            edge_hint: None,
             forwarded_buttons: BTreeSet::new(),
             controlled: false,
             injected_keys: BTreeSet::new(),
             injected_buttons: BTreeSet::new(),
+            lone_command: None,
         }
     }
 
@@ -112,6 +153,8 @@ impl Node {
 
     pub fn peer_disconnected(&mut self) -> Vec<Action> {
         let mut out = Vec::new();
+        self.edge_since = None;
+        self.set_hint(None, &mut out);
         if self.is_remote() {
             self.leave_remote(&mut out, false, None);
         }
@@ -134,19 +177,26 @@ impl Node {
     }
 
     pub fn local_input(&mut self, ev: InputEvent) -> Vec<Action> {
+        self.local_input_at(ev, Instant::now())
+    }
+
+    /// [`Self::local_input`] at a given time, for tests.
+    pub fn local_input_at(&mut self, ev: InputEvent, now: Instant) -> Vec<Action> {
         let mut out = Vec::new();
-        match ev {
-            InputEvent::Key { usage, down } => set(&mut self.local_keys, usage, down),
-            InputEvent::Button { button, down } => set(&mut self.local_buttons, button, down),
-            _ => {}
+        if let InputEvent::Button { button, down } = ev {
+            set(&mut self.local_buttons, button, down);
         }
 
         match self.mode {
-            Mode::Local => {
-                if let InputEvent::MouseMove { x, y } = ev {
-                    self.maybe_enter(x, y, &mut out);
+            Mode::Local => match ev {
+                InputEvent::MouseMove { x, y } => self.maybe_enter(x, y, now, &mut out),
+                // A drag hides the bar: it cannot cross.
+                InputEvent::Button { down: true, .. } => {
+                    self.edge_since = None;
+                    self.set_hint(None, &mut out);
                 }
-            }
+                _ => {}
+            },
             Mode::Remote { .. } => match ev {
                 InputEvent::MouseDelta { dx, dy } => self.move_remote(dx, dy, &mut out),
                 InputEvent::Button { button, down } => {
@@ -180,58 +230,124 @@ impl Node {
             Message::Leave => {
                 self.release_injected(&mut out);
                 if std::mem::take(&mut self.controlled) {
+                    // Control goes back: whatever was copied here goes with it.
+                    out.push(Action::ShareClipboard);
                     out.push(Action::Log("peer released control".into()));
                 }
             }
             Message::ReleaseAll => self.release_injected(&mut out),
+            Message::Clipboard { text } => out.push(Action::SetClipboard(text)),
             _ if !self.controlled => {}
             Message::MouseMove { x, y } => out.push(Action::Inject(InputEvent::MouseMove { x, y })),
             Message::Button { button, down } => {
                 if down {
+                    // Cmd+click is a Ctrl+click, not a Windows key.
+                    self.lone_command = None;
                     self.injected_buttons.insert(button);
                     out.push(Action::Inject(InputEvent::Button { button, down }));
                 } else if self.injected_buttons.remove(&button) {
                     out.push(Action::Inject(InputEvent::Button { button, down }));
                 }
             }
-            Message::Wheel { dx, dy } => out.push(Action::Inject(InputEvent::Wheel { dx, dy })),
-            Message::Key { usage, down } => {
-                let usage = self.remap(usage);
+            Message::Wheel { dx, dy } => {
+                self.lone_command = None;
+                out.push(Action::Inject(InputEvent::Wheel { dx, dy }));
+            }
+            Message::Key { usage: sent, down } => {
+                let usage = self.remap(sent);
+                let command_as_ctrl = usage != sent && self.os == Os::Windows && is_gui(sent);
                 if down {
+                    self.lone_command = command_as_ctrl.then_some(sent);
                     self.injected_keys.insert(usage);
                     out.push(Action::Inject(InputEvent::Key { usage, down }));
                 } else if self.injected_keys.remove(&usage) {
                     out.push(Action::Inject(InputEvent::Key { usage, down }));
+                    // Cmd pressed and released alone: what a Windows key would do.
+                    if self.lone_command.take() == Some(sent) {
+                        out.push(Action::Inject(InputEvent::Key { usage: sent, down: true }));
+                        out.push(Action::Inject(InputEvent::Key { usage: sent, down: false }));
+                    }
+                } else {
+                    self.lone_command = None;
                 }
             }
         }
         out
     }
 
-    fn maybe_enter(&mut self, x: i32, y: i32, out: &mut Vec<Action>) {
+    fn maybe_enter(&mut self, x: i32, y: i32, now: Instant, out: &mut Vec<Action>) {
         let Some(peer) = &self.peer else { return };
         let side = self.config.peer_side;
-        // No crossing mid-drag: the button-up would land on the wrong machine.
-        if !self.local_buttons.is_empty() || !on_edge(&self.screens, side, x, y) {
-            return;
-        }
-        let (Some(from), Some(to), Some(peer_x)) = (
+        let (Some(from), Some(to), Some(peer_x), Some(edge)) = (
             edge_span(&self.screens, side),
             edge_span(&peer.screens, side.opposite()),
             edge_x(&peer.screens, side.opposite()),
+            edge_x(&self.screens, side),
         ) else {
             return;
         };
-        let peer_y = map_span(y, from, to);
-
-        out.push(Action::Grab(true));
-        // Keys held while crossing would never see their key-up locally.
-        for &usage in &self.local_keys {
-            out.push(Action::Inject(InputEvent::Key { usage, down: false }));
+        // No crossing mid-drag: the button-up would land on the wrong machine.
+        let dragging = !self.local_buttons.is_empty();
+        if dragging || !on_edge(&self.screens, side, x, y) {
+            self.edge_since = None;
+            let hint = if dragging { None } else { self.hint_near(x, y, edge, 0) };
+            self.set_hint(hint, out);
+            return;
         }
+
+        let delay = self.config.edge_delay;
+        if !delay.is_zero() {
+            let pushed = now.saturating_duration_since(*self.edge_since.get_or_insert(now));
+            if pushed < delay {
+                let push = (pushed.as_secs_f64() / delay.as_secs_f64() * EDGE_STEPS as f64) as u8;
+                let hint = self.hint_near(x, y, edge, push);
+                self.set_hint(hint, out);
+                return;
+            }
+        }
+        self.edge_since = None;
+        self.set_hint(None, out);
+
+        let peer_y = map_span(y, from, to);
+        out.push(Action::Grab(true));
+        out.push(Action::ShareClipboard);
         out.push(Action::Send(Message::Enter { x: peer_x, y: peer_y }));
-        out.push(Action::Log(format!("-> {} at ({peer_x}, {peer_y})", peer.name)));
+        out.push(Action::Log(format!("-> {} at ({peer_x}, {peer_y})", self.peer_name())));
         self.mode = Mode::Remote { x: peer_x as f64, y: peer_y as f64 };
+    }
+
+    /// The bar for a cursor at (x, y), if it is close to the shared edge.
+    fn hint_near(&self, x: i32, y: i32, edge: i32, push: u8) -> Option<EdgeHint> {
+        let side = self.config.peer_side;
+        // Positions past the edge count as touching it.
+        let screen = self.screens.iter().find(|r| {
+            let reaches = match side {
+                Side::Left => r.left == edge && x < r.right,
+                Side::Right => r.right - 1 == edge && x >= r.left,
+            };
+            reaches && r.top <= y && y < r.bottom
+        })?;
+        let distance = match side {
+            Side::Left => x - edge,
+            Side::Right => edge - x,
+        }
+        .max(0);
+        if distance >= EDGE_NEAR {
+            return None;
+        }
+        let near = EDGE_STEPS - (distance * EDGE_STEPS as i32 / EDGE_NEAR) as u8;
+        Some(EdgeHint { side, x: edge, top: screen.top, bottom: screen.bottom, near, push })
+    }
+
+    fn set_hint(&mut self, hint: Option<EdgeHint>, out: &mut Vec<Action>) {
+        if hint != self.edge_hint {
+            self.edge_hint = hint;
+            out.push(Action::Edge(hint));
+        }
+    }
+
+    fn peer_name(&self) -> &str {
+        self.peer.as_ref().map_or("peer", |p| p.name.as_str())
     }
 
     fn move_remote(&mut self, dx: i32, dy: i32, out: &mut Vec<Action>) {
@@ -292,6 +408,7 @@ impl Node {
     }
 
     fn release_injected(&mut self, out: &mut Vec<Action>) {
+        self.lone_command = None;
         // Ascending order releases modifiers (0xE0..) after ordinary keys.
         for usage in std::mem::take(&mut self.injected_keys) {
             out.push(Action::Inject(InputEvent::Key { usage, down: false }));
@@ -305,6 +422,10 @@ impl Node {
         let cross_os = self.peer.as_ref().is_some_and(|p| p.os != self.os);
         if self.config.swap_ctrl_cmd && cross_os { swap_ctrl_gui(usage) } else { usage }
     }
+}
+
+fn is_gui(usage: u16) -> bool {
+    usage == sc_keymap::usage::LEFT_GUI || usage == sc_keymap::usage::RIGHT_GUI
 }
 
 fn set<T: Ord>(set: &mut BTreeSet<T>, item: T, present: bool) {

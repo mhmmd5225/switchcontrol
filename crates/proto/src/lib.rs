@@ -14,11 +14,14 @@ use std::io::{self, Read, Write};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 pub const DEFAULT_PORT: u16 = 24800;
 
-/// Upper bound on a frame body; real messages are a few dozen bytes.
-const MAX_FRAME: usize = 64 * 1024;
+/// Longest clipboard text shared, in bytes.
+pub const MAX_CLIPBOARD: usize = 1024 * 1024;
+/// Upper bound on a frame body; input messages are a few dozen bytes, a
+/// clipboard text at most [`MAX_CLIPBOARD`].
+const MAX_FRAME: usize = MAX_CLIPBOARD + 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Os {
@@ -141,6 +144,10 @@ pub enum Message {
     ReleaseAll,
     /// Heartbeat, sent every second by both sides.
     Ping,
+    /// The sender's clipboard text, sent when control passes to the receiver.
+    Clipboard {
+        text: String,
+    },
 }
 
 /// Frames exchanged right after the TLS handshake, before [`Message::Hello`].
@@ -209,6 +216,14 @@ mod tests {
             assert_eq!(&read_frame::<Message>(&mut reader).unwrap(), msg);
         }
         assert!(reader.is_empty());
+    }
+
+    #[test]
+    fn largest_clipboard_fits_in_a_frame() {
+        let msg = Message::Clipboard { text: "ğ".repeat(MAX_CLIPBOARD / 2) };
+        let mut wire = Vec::new();
+        write_frame(&mut wire, &msg).unwrap();
+        assert_eq!(read_frame::<Message>(&mut wire.as_slice()).unwrap(), msg);
     }
 
     #[test]
