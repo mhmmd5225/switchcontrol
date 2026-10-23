@@ -2,6 +2,13 @@
 
 Windows ↔ macOS arasında tek klavye ve mouse paylaşımı (ShareMouse benzeri yazılım KVM).
 
+## Hazır dosyalar
+
+Her gönderimde GitHub Actions programı gerçek Mac ve Windows makinelerinde derleyip test eder. Hazır dosyalar: GitHub'da depo > **Actions** > son yeşil çalışma > **Artifacts** (`SwitchControl-macOS`, `SwitchControl-Windows`). `v` ile başlayan bir sürüm etiketi (ör. `v0.2.0`) gönderilince aynı dosyalar **Releases** sayfasına da eklenir.
+
+- **Mac** (yalnızca Apple Silicon / M serisi): zip'i açın. Uygulama yerel imzalı ve internetten indirildiği için macOS ilk açılışı engeller: Finder'da sağ tık > **Aç** deyin ya da Terminal'de `xattr -dr com.apple.quarantine SwitchControl.app` çalıştırın. Her yeni sürümde Girdi İzleme ve Erişilebilirlik izinlerini yeniden verin (eski kaydı silip yenisini ekleyin).
+- **Windows**: zip'ten `switchcontrol.exe`'yi çıkarın. "Windows bilgisayarınızı korudu" uyarısı çıkarsa **Ek bilgi > Yine de çalıştır**.
+
 ## Pencere
 
 Program argümansız açılınca (ör. Finder'dan çift tıklayınca) bir pencere açar. Pencerede:
