@@ -14,6 +14,7 @@ mod gui;
 mod identity;
 mod net;
 mod pairing;
+mod theme;
 mod tls;
 
 use std::process::ExitCode;
