@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 use sc_core::Side;
 use sc_platform::Permissions;
 use sc_platform::sys;
@@ -24,11 +24,13 @@ use crate::engine::{Engine, LinkState, Report};
 use crate::identity::{self, Fingerprint, TrustStore};
 use crate::net::{self, PinSource, Waiting};
 use crate::pairing::normalize_pin;
-use crate::theme::{self, Link, Palette};
+use crate::theme::{self, Kind, Link, Palette};
 use crate::tray::{Tray, TrayCommand};
 
 const SETTINGS_FILE: &str = "settings.toml";
 const LOG_LINES: usize = 500;
+/// The window does not resize: both pages are laid out to fit it.
+const WINDOW_SIZE: (f32, f32) = (460.0, 780.0);
 
 /// The emergency hotkey as this OS spells it.
 const HOTKEY: &str =
@@ -40,8 +42,9 @@ pub fn run(at_login: bool) -> Result<(), String> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("SwitchControl")
-            .with_inner_size([460.0, 680.0])
-            .with_min_inner_size([420.0, 520.0])
+            .with_inner_size([WINDOW_SIZE.0, WINDOW_SIZE.1])
+            .with_resizable(false)
+            .with_maximize_button(false)
             .with_icon(Arc::new(
                 eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icon-256.png"))
                     .expect("bundled icon is a valid PNG"),
@@ -460,22 +463,23 @@ impl GuiApp {
     }
 
     fn header_ui(&mut self, ui: &mut egui::Ui) {
+        let (_, _, link) = self.status();
         let dry_run = self.dry_run && self.running.is_some();
-        let page = &mut self.page;
         ui.horizontal(|ui| {
             ui.label(theme::semibold("SwitchControl").size(20.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                theme::segmented(
-                    ui,
-                    page,
-                    &[(Page::Connection, "Bağlantı"), (Page::Settings, "Ayarlar")],
-                );
+                theme::status_pill(ui, link);
                 if dry_run {
                     ui.label(RichText::new("Deneme modu").small().weak());
                 }
             });
         });
-        ui.add_space(4.0);
+        ui.add_space(2.0);
+        theme::tabs(
+            ui,
+            &mut self.page,
+            &[(Page::Connection, "Bağlantı"), (Page::Settings, "Ayarlar")],
+        );
     }
 
     fn status_ui(&self, ui: &mut egui::Ui) {
@@ -523,13 +527,13 @@ impl GuiApp {
                 theme::row(ui, name, |ui| {
                     if granted {
                         ui.label(RichText::new("verildi").color(p.green));
-                    } else if ui.button("Ayarları aç").clicked() {
+                    } else if theme::button(ui, "Ayarları aç", Kind::Secondary).clicked() {
                         open_privacy_pane(pane);
                     }
                 });
             }
             ui.horizontal(|ui| {
-                if ui.button("İzin iste").clicked() {
+                if theme::button(ui, "İzin iste", Kind::Secondary).clicked() {
                     sys::init();
                 }
                 ui.label(
@@ -566,28 +570,28 @@ impl GuiApp {
                 );
                 let pin = normalize_pin(&self.view.pin_input);
                 ui.horizontal(|ui| {
-                    let edit = ui
-                        .add(
-                            egui::TextEdit::singleline(&mut self.view.pin_input)
-                                .hint_text("123 456")
-                                .font(egui::TextStyle::Heading)
-                                .desired_width(130.0),
-                        )
-                        .labelled_by(label.id);
+                    let edit = theme::text_field(
+                        ui,
+                        &mut self.view.pin_input,
+                        "123 456",
+                        150.0,
+                        egui::TextStyle::Heading,
+                    )
+                    .labelled_by(label.id);
                     if !edit.has_focus() && self.view.pin_input.is_empty() {
                         edit.request_focus();
                     }
                     let entered =
                         edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    let pair = ui.add_enabled(
-                        pin.is_some(),
-                        egui::Button::new(theme::semibold("Eşleştir").color(Color32::WHITE))
-                            .fill(p.accent),
-                    );
+                    let pair = ui
+                        .add_enabled_ui(pin.is_some(), |ui| {
+                            theme::button(ui, "Eşleştir", Kind::Primary)
+                        })
+                        .inner;
                     if pin.is_some() && (pair.clicked() || entered) {
                         answer = Some(pin.clone());
                     }
-                    if ui.button("İptal").clicked() {
+                    if theme::button(ui, "İptal", Kind::Ghost).clicked() {
                         answer = Some(None);
                     }
                 });
@@ -623,10 +627,12 @@ impl GuiApp {
                             } else {
                                 "boş: kendisi bulur"
                             };
-                            ui.add(
-                                egui::TextEdit::singleline(&mut form.address)
-                                    .hint_text(hint)
-                                    .desired_width(180.0),
+                            theme::text_field(
+                                ui,
+                                &mut form.address,
+                                hint,
+                                190.0,
+                                egui::TextStyle::Body,
                             )
                         });
                         edit.labelled_by(label.id);
@@ -635,7 +641,7 @@ impl GuiApp {
                     Mode::Listen => {
                         theme::row(ui, "Bu bilgisayarın adresi", |ui| match local_ip {
                             Some(ip) => {
-                                if ui.small_button("Kopyala").clicked() {
+                                if theme::button(ui, "Kopyala", Kind::Ghost).clicked() {
                                     ui.ctx().copy_text(ip.to_string());
                                 }
                                 ui.label(theme::semibold(ip.to_string()));
@@ -661,7 +667,7 @@ impl GuiApp {
                 });
                 theme::divider(ui);
                 let (label, edit) = theme::row(ui, "Bu bilgisayarın adı", |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut form.name).desired_width(180.0))
+                    theme::text_field(ui, &mut form.name, "", 190.0, egui::TextStyle::Body)
                 });
                 edit.labelled_by(label.id);
             });
@@ -701,46 +707,12 @@ impl GuiApp {
                 theme::divider(ui);
                 let clip = "Pano paylaşımı";
                 theme::row(ui, clip, |ui| theme::switch(ui, &mut form.clipboard, clip));
-                ui.label(
-                    RichText::new(
-                        "Kopyalanan metin, imleç diğer bilgisayara geçerken oraya da aktarılır.",
-                    )
-                    .small()
-                    .weak(),
-                );
             });
-        });
-    }
-
-    fn security_ui(&mut self, ui: &mut egui::Ui) {
-        let running = self.running.is_some();
-        theme::section(ui, "Güvenlik");
-        theme::card(ui, |ui| {
-            let mut forget = false;
-            theme::row(ui, &format!("Eşleşmiş bilgisayar: {}", self.paired.len()), |ui| {
-                let can_forget = !running && !self.paired.is_empty();
-                forget =
-                    ui.add_enabled(can_forget, egui::Button::new("Eşleşmeleri unut")).clicked();
-            });
-            if forget {
-                match TrustStore::load(&self.data_dir).and_then(|mut t| t.clear()) {
-                    Ok(()) => self.push_log("forgot all paired computers".into()),
-                    Err(e) => self.error = Some(format!("Eşleşmeler silinemedi: {e}")),
-                }
-                self.paired = paired_list(&self.data_dir);
-            }
-            ui.label(
-                RichText::new(
-                    "Bağlantı TLS 1.3 ile şifrelenir. Yeni bir bilgisayar ilk bağlantıda \
-                     PIN ile eşleştirilir.",
-                )
-                .small()
-                .weak(),
-            );
         });
     }
 
     fn app_ui(&mut self, ui: &mut egui::Ui) {
+        let running = self.running.is_some();
         theme::section(ui, "Uygulama");
         theme::card(ui, |ui| {
             let label = "Oturum açılınca başlat";
@@ -752,18 +724,36 @@ impl GuiApp {
                     Err(e) => self.error = Some(format!("Otomatik başlatma ayarlanamadı: {e}")),
                 }
             }
-            let note = if self.tray.is_some() {
-                "Açılışta simge olarak başlar ve kayıtlı ayarlarla bağlanır. Pencereyi kapatınca \
-                 SwitchControl simgeye iner; çıkmak için simgenin menüsünden Çıkış'ı seçin."
-            } else {
-                "Açılışta kayıtlı ayarlarla başlar ve bağlanır."
-            };
-            ui.label(RichText::new(note).small().weak());
+            if self.tray.is_some() {
+                ui.label(
+                    RichText::new("Pencereyi kapatınca simgeye iner; çıkış simgenin menüsünde.")
+                        .small()
+                        .weak(),
+                );
+            }
+            theme::divider(ui);
+            let mut forget = false;
+            theme::row(ui, &format!("Eşleşmiş bilgisayar: {}", self.paired.len()), |ui| {
+                let can_forget = !running && !self.paired.is_empty();
+                forget = ui
+                    .add_enabled_ui(can_forget, |ui| {
+                        theme::button(ui, "Eşleşmeleri unut", Kind::Danger)
+                    })
+                    .inner
+                    .clicked();
+            });
+            if forget {
+                match TrustStore::load(&self.data_dir).and_then(|mut t| t.clear()) {
+                    Ok(()) => self.push_log("forgot all paired computers".into()),
+                    Err(e) => self.error = Some(format!("Eşleşmeler silinemedi: {e}")),
+                }
+                self.paired = paired_list(&self.data_dir);
+            }
         });
     }
 
     fn log_ui(&self, ui: &mut egui::Ui) {
-        theme::section(ui, "Ayrıntılar");
+        ui.add_space(10.0);
         theme::card(ui, |ui| {
             egui::CollapsingHeader::new("Günlük").default_open(false).show(ui, |ui| {
                 egui::ScrollArea::vertical().max_height(180.0).stick_to_bottom(true).show(
@@ -779,12 +769,10 @@ impl GuiApp {
     }
 
     fn footer_ui(&mut self, ui: &mut egui::Ui) {
-        let p = Palette::of(ui);
         let running = self.running.is_some();
-        // The light palette's red keeps white text readable in both themes.
-        let (text, fill) =
-            if running { ("Durdur", Palette::LIGHT.red) } else { ("Başlat", p.accent) };
-        if theme::primary_button(ui, text, fill).clicked() {
+        let (text, kind) =
+            if running { ("Durdur", Kind::Danger) } else { ("Başlat", Kind::Primary) };
+        if theme::big_button(ui, text, kind).clicked() {
             if running { self.stop() } else { self.start() }
         }
         ui.vertical_centered(|ui| {
@@ -807,44 +795,35 @@ impl eframe::App for GuiApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let p = Palette::of(ui);
+        theme::paint_backdrop(ui);
         egui::Panel::bottom("footer")
             .show_separator_line(false)
             .frame(
                 egui::Frame::new()
-                    .fill(p.background)
-                    .stroke(egui::Stroke::new(1.0, p.border))
+                    .fill(egui::Color32::from_black_alpha(70))
                     .inner_margin(egui::Margin { left: 16, right: 16, top: 12, bottom: 10 }),
             )
             .show(ui, |ui| self.footer_ui(ui));
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::new().fill(p.background).inner_margin(egui::Margin::symmetric(16, 14)),
-            )
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 14)))
             .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    // Room for the scroll bar, so it does not cover the cards.
-                    egui::Frame::new()
-                        .inner_margin(egui::Margin { right: 10, ..Default::default() })
-                        .show(ui, |ui| {
-                            self.header_ui(ui);
-                            // Needed whichever page is open: a PIN question must not hide.
-                            if self.page == Page::Connection {
-                                self.status_ui(ui);
-                            }
-                            self.permissions_ui(ui);
-                            self.pairing_ui(ui);
-                            match self.page {
-                                Page::Connection => self.connection_ui(ui),
-                                Page::Settings => {
-                                    self.behavior_ui(ui);
-                                    self.security_ui(ui);
-                                    self.app_ui(ui);
-                                    self.log_ui(ui);
-                                }
-                            }
-                            ui.add_space(4.0);
-                        });
+                self.header_ui(ui);
+                // Needed whichever page is open: a PIN question must not hide.
+                if self.page == Page::Connection {
+                    self.status_ui(ui);
+                }
+                self.permissions_ui(ui);
+                self.pairing_ui(ui);
+                // Both pages fit; the bar shows only if a long list or the open log overflow.
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self
+                    .page
+                {
+                    Page::Connection => self.connection_ui(ui),
+                    Page::Settings => {
+                        self.behavior_ui(ui);
+                        self.app_ui(ui);
+                        self.log_ui(ui);
+                    }
                 });
             });
         self.edge_bar_ui(ui.ctx());
@@ -896,7 +875,10 @@ fn found_ui(ui: &mut egui::Ui, address: &mut String, paired: &[Fingerprint]) {
         };
         let addr = computer.addr.to_string();
         theme::row(ui, &format!("{} ({os})", computer.name), |ui| {
-            if ui.add_enabled(*address != addr, egui::Button::new("Seç").small()).clicked() {
+            let pick = ui
+                .add_enabled_ui(*address != addr, |ui| theme::button(ui, "Seç", Kind::Ghost))
+                .inner;
+            if pick.clicked() {
                 *address = addr.clone();
             }
             if paired.contains(&computer.fingerprint) {
@@ -1008,6 +990,20 @@ mod tests {
         harness.run_steps(2);
         harness.get_by_label("Diğer bilgisayar");
         assert!(harness.query_by_label("İmleç hızı").is_none());
+    }
+
+    /// Hovering a button changes its colour only: its size and place stay put.
+    #[test]
+    fn hover_does_not_move_widgets() {
+        let dir = temp_dir("hover");
+        let mut harness = harness(&dir);
+        harness.step();
+        for label in ["Başlat", "Ayarlar", "Bağlan"] {
+            let before = harness.get_by_label(label).rect();
+            harness.get_by_label(label).hover();
+            harness.run_steps(8);
+            assert_eq!(harness.get_by_label(label).rect(), before, "{label} moved on hover");
+        }
     }
 
     #[test]
