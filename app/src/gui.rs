@@ -36,7 +36,11 @@ pub fn run() -> Result<(), String> {
         viewport: egui::ViewportBuilder::default()
             .with_title("SwitchControl")
             .with_inner_size([460.0, 760.0])
-            .with_min_inner_size([420.0, 520.0]),
+            .with_min_inner_size([420.0, 520.0])
+            .with_icon(Arc::new(
+                eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icon-256.png"))
+                    .expect("bundled icon is a valid PNG"),
+            )),
         ..Default::default()
     };
     let data_dir = identity::default_dir();

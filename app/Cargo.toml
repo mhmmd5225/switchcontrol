@@ -17,5 +17,12 @@ rustls.workspace = true
 spake2.workspace = true
 eframe = "0.37"
 
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = ["Win32_System_Console"]
+
+[build-dependencies]
+embed-resource = "3"
+
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["eframe"] }

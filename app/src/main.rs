@@ -7,6 +7,9 @@
 //! Without arguments (e.g. started from Finder) it opens a window; with
 //! arguments it runs in the terminal.
 
+// On Windows a window program, so double-clicking it opens no console.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod config;
 mod edgebar;
 mod engine;
@@ -38,6 +41,7 @@ fn main() -> ExitCode {
         };
     }
 
+    attach_console();
     let settings = match config::from_args(&args) {
         Ok(settings) => settings,
         Err(e) => {
@@ -77,3 +81,18 @@ fn main() -> ExitCode {
     engine.wait();
     ExitCode::SUCCESS
 }
+
+/// On Windows the program has no console of its own: in the terminal it
+/// writes to the one it was started from, or opens one if there is none.
+#[cfg(windows)]
+fn attach_console() {
+    use windows::Win32::System::Console::{ATTACH_PARENT_PROCESS, AllocConsole, AttachConsole};
+    unsafe {
+        if AttachConsole(ATTACH_PARENT_PROCESS).is_err() {
+            let _ = AllocConsole();
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_console() {}

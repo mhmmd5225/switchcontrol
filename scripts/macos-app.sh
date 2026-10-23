@@ -12,8 +12,20 @@ cargo build --release -p switchcontrol
 app=target/release/SwitchControl.app
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/switchcontrol "$app/Contents/MacOS/SwitchControl"
+
+# The Dock and Finder icon, from assets/icon.png (made by scripts/make-icons.py).
+iconset=target/release/AppIcon.iconset
+rm -rf "$iconset"
+mkdir -p "$iconset"
+for size in 16 32 128 256 512; do
+    sips -z $size $size assets/icon.png --out "$iconset/icon_${size}x${size}.png" >/dev/null
+    double=$((size * 2))
+    sips -z $double $double assets/icon.png --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
+rm -rf "$iconset"
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -27,6 +39,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <string>com.switchcontrol.app</string>
     <key>CFBundleExecutable</key>
     <string>SwitchControl</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
