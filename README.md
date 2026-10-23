@@ -23,6 +23,12 @@ Program argümansız açılınca (ör. Finder'dan çift tıklayınca) bir pencer
 
 Ayarlar *Başlat*'a basınca veri klasöründeki `settings.toml` dosyasına kaydedilir (`--config` ile aynı biçim).
 
+### Simge ve otomatik başlama
+
+Windows'ta bildirim alanında, Mac'te menü çubuğunda bir SwitchControl simgesi durur. Menüsünde durum, *Başlat/Durdur*, *Pencereyi göster* ve *Çıkış* vardır (Windows'ta simgeye sol tıklamak pencereyi açar). Pencereyi kapatmak programı kapatmaz, simgeye indirir; programdan çıkmak için simgenin menüsünden *Çıkış*'ı seçin.
+
+*Uygulama > Oturum açılınca başlat* açıksa SwitchControl oturum açılınca simge olarak başlar ve kayıtlı ayarlarla bağlanır. Windows'ta kullanıcının başlangıç kaydına (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`), Mac'te `~/Library/LaunchAgents/com.switchcontrol.app.plist` dosyasına yazılır. Uygulamayı başka bir klasöre taşırsanız anahtarı kapatıp yeniden açın.
+
 ### Mac uygulaması
 
 Mac'te depo klasöründe:

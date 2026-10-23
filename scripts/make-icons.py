@@ -2,7 +2,8 @@
 """Draws the app icon: two screens joined by a link, on a blue rounded square.
 
 Writes assets/icon.png (1024 px, also used for the macOS .icns),
-assets/icon-256.png (window icon) and assets/icon.ico (Windows .exe).
+assets/icon-256.png (window icon), assets/tray.png (tray and menu bar)
+and assets/icon.ico (Windows .exe).
 Needs Pillow. Run from anywhere: python3 scripts/make-icons.py
 """
 from pathlib import Path
@@ -79,6 +80,7 @@ def main():
     draw(100).save(ASSETS / "icon.png")
     tight = draw(24)
     tight.resize((256, 256), Image.LANCZOS).save(ASSETS / "icon-256.png")
+    tight.resize((64, 64), Image.LANCZOS).save(ASSETS / "tray.png")
     tight.save(
         ASSETS / "icon.ico",
         sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],

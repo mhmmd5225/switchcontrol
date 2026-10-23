@@ -16,6 +16,7 @@ use sc_core::Side;
 use sc_platform::Permissions;
 use sc_platform::sys;
 
+use crate::autostart;
 use crate::config::{self, FileConfig, RunFlags};
 use crate::edgebar::{EdgeBar, Strip};
 use crate::engine::{Engine, LinkState, Report};
@@ -23,6 +24,7 @@ use crate::identity::{self, TrustStore};
 use crate::net::{self, PinSource, Waiting};
 use crate::pairing::normalize_pin;
 use crate::theme::{self, Link, Palette};
+use crate::tray::{Tray, TrayCommand};
 
 const SETTINGS_FILE: &str = "settings.toml";
 const LOG_LINES: usize = 500;
@@ -31,7 +33,9 @@ const LOG_LINES: usize = 500;
 const HOTKEY: &str =
     if cfg!(target_os = "macos") { "Ctrl+Option+Shift+Esc" } else { "Ctrl+Alt+Shift+Esc" };
 
-pub fn run() -> Result<(), String> {
+/// Opens the window. `at_login`: started by [`autostart`], so hide in the
+/// tray and start sharing right away.
+pub fn run(at_login: bool) -> Result<(), String> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("SwitchControl")
@@ -49,7 +53,17 @@ pub fn run() -> Result<(), String> {
     eframe::run_native(
         "SwitchControl",
         options,
-        Box::new(move |cc| Ok(Box::new(GuiApp::new(cc.egui_ctx.clone(), data_dir, dry_run)))),
+        Box::new(move |cc| {
+            let mut app = GuiApp::new(cc.egui_ctx.clone(), data_dir, dry_run);
+            match Tray::new(&cc.egui_ctx) {
+                Ok(tray) => app.tray = Some(tray),
+                Err(e) => app.push_log(format!("no tray icon: {e}")),
+            }
+            if at_login {
+                app.launched_at_login();
+            }
+            Ok(Box::new(app))
+        }),
     )
     .map_err(|e| e.to_string())
 }
@@ -157,8 +171,18 @@ pub struct GuiApp {
     paired: usize,
     local_ip: Option<IpAddr>,
     edge_bar: EdgeBar,
-    /// Where the edge bar goes while the engine runs, if it is on.
+    /// Where the edge bar goes, if it is on. Its window stays open even while
+    /// sharing is off, so it can show up while the main window is hidden.
     strip: Option<Strip>,
+    /// The settings `strip` was made for; `None` to make it again.
+    strip_for: Option<(Side, bool)>,
+    tray: Option<Tray>,
+    /// Hide into the tray once the first frame has opened the edge bar.
+    hide_on_first_frame: bool,
+    /// Closing the window really quits (picked from the tray menu).
+    quitting: bool,
+    /// Whether the OS starts SwitchControl at login.
+    autostart: bool,
 }
 
 impl GuiApp {
@@ -183,6 +207,70 @@ impl GuiApp {
             local_ip: local_ip(),
             edge_bar: EdgeBar::default(),
             strip: None,
+            strip_for: None,
+            tray: None,
+            hide_on_first_frame: false,
+            quitting: false,
+            autostart: autostart::is_enabled(),
+        }
+    }
+
+    /// Started at login: go to the tray and share with the saved settings.
+    fn launched_at_login(&mut self) {
+        self.hide_on_first_frame = self.tray.is_some();
+        if self.form.mode == Mode::Listen || !self.form.address.trim().is_empty() {
+            self.start();
+        }
+    }
+
+    /// Carries out what was picked from the tray icon, and keeps its status current.
+    fn tray_logic(&mut self, ctx: &egui::Context) {
+        let Some(tray) = &self.tray else { return };
+        for command in tray.commands() {
+            match command {
+                TrayCommand::Show => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+                TrayCommand::StartStop => {
+                    if self.running.is_some() {
+                        self.stop()
+                    } else {
+                        self.start()
+                    }
+                }
+                TrayCommand::Quit => {
+                    self.quitting = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        }
+        // The close button hides the window; the tray icon brings it back.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+        let status = self.status().0;
+        let running = self.running.is_some();
+        if let Some(tray) = &mut self.tray {
+            tray.update(&status, running);
+        }
+    }
+
+    /// Keeps the edge bar's window where the settings put it.
+    fn edge_bar_ui(&mut self, ctx: &egui::Context) {
+        let wanted = (self.form.side, self.form.edge_bar);
+        if self.strip_for != Some(wanted) {
+            self.strip_for = Some(wanted);
+            // Monitor coordinates are physical pixels on Windows and points elsewhere.
+            let scale =
+                if cfg!(windows) { ctx.native_pixels_per_point().unwrap_or(1.0) } else { 1.0 };
+            let screens: Vec<_> = sys::monitors().into_iter().map(|m| m.bounds).collect();
+            self.strip =
+                if self.form.edge_bar { Strip::new(&screens, self.form.side, scale) } else { None };
+        }
+        if let Some(strip) = self.strip {
+            self.edge_bar.show(ctx, strip);
         }
     }
 
@@ -227,12 +315,8 @@ impl GuiApp {
         }));
 
         self.view = View { log: std::mem::take(&mut self.view.log), ..View::default() };
-        // Monitor coordinates are physical pixels on Windows and points elsewhere.
-        let scale =
-            if cfg!(windows) { self.ctx.native_pixels_per_point().unwrap_or(1.0) } else { 1.0 };
-        let screens: Vec<_> = sys::monitors().into_iter().map(|m| m.bounds).collect();
-        self.strip =
-            if settings.edge_bar { Strip::new(&screens, settings.side, scale) } else { None };
+        // Monitors may have changed since the bar was placed.
+        self.strip_for = None;
         self.running = Some(Running {
             generation,
             engine: Some(Engine::start(settings, pin, report)),
@@ -243,7 +327,6 @@ impl GuiApp {
     fn stop(&mut self) {
         // Dropping stops the engine and waits for it.
         self.running = None;
-        self.strip = None;
         self.edge_bar.set(&self.ctx, None);
         self.view.link = None;
         self.view.remote = false;
@@ -589,6 +672,28 @@ impl GuiApp {
         });
     }
 
+    fn app_ui(&mut self, ui: &mut egui::Ui) {
+        theme::section(ui, "Uygulama");
+        theme::card(ui, |ui| {
+            let label = "Oturum açılınca başlat";
+            let mut on = self.autostart;
+            let (_, switch) = theme::row(ui, label, |ui| theme::switch(ui, &mut on, label));
+            if switch.changed() {
+                match autostart::set(on) {
+                    Ok(()) => self.autostart = on,
+                    Err(e) => self.error = Some(format!("Otomatik başlatma ayarlanamadı: {e}")),
+                }
+            }
+            let note = if self.tray.is_some() {
+                "Açılışta simge olarak başlar ve kayıtlı ayarlarla bağlanır. Pencereyi kapatınca \
+                 SwitchControl simgeye iner; çıkmak için simgenin menüsünden Çıkış'ı seçin."
+            } else {
+                "Açılışta kayıtlı ayarlarla başlar ve bağlanır."
+            };
+            ui.label(RichText::new(note).small().weak());
+        });
+    }
+
     fn log_ui(&self, ui: &mut egui::Ui) {
         theme::section(ui, "Ayrıntılar");
         theme::card(ui, |ui| {
@@ -627,8 +732,13 @@ impl GuiApp {
 }
 
 impl eframe::App for GuiApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    /// Also runs while the window is hidden in the tray.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll();
+        self.tray_logic(ctx);
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let p = Palette::of(ui);
         egui::Panel::bottom("footer")
             .show_separator_line(false)
@@ -655,13 +765,15 @@ impl eframe::App for GuiApp {
                             self.pairing_ui(ui);
                             self.settings_ui(ui);
                             self.security_ui(ui);
+                            self.app_ui(ui);
                             self.log_ui(ui);
                             ui.add_space(4.0);
                         });
                 });
             });
-        if let (Some(_), Some(strip)) = (&self.running, self.strip) {
-            self.edge_bar.show(ui.ctx(), strip);
+        self.edge_bar_ui(ui.ctx());
+        if std::mem::take(&mut self.hide_on_first_frame) {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
         // Picks up permission changes made in System Settings. Otherwise the
         // window only redraws on input or when the engine reports something.

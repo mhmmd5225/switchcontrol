@@ -46,8 +46,6 @@ pub struct Settings {
     pub swap_ctrl_cmd: bool,
     pub speed: f64,
     pub edge_delay: Duration,
-    /// Draw a bar at the shared edge when the cursor comes near (window only).
-    pub edge_bar: bool,
     pub pin: Option<String>,
     pub data_dir: PathBuf,
     pub forget_peers: bool,
@@ -67,6 +65,7 @@ pub struct FileConfig {
     pub speed: Option<f64>,
     pub swap_ctrl_cmd: Option<bool>,
     pub edge_delay_ms: Option<u64>,
+    /// Draw a bar at the shared edge when the cursor comes near (window only).
     pub edge_bar: Option<bool>,
     pub data_dir: Option<PathBuf>,
 }
@@ -169,7 +168,6 @@ pub fn resolve(config: FileConfig, flags: RunFlags) -> Result<Settings, String> 
         swap_ctrl_cmd: config.swap_ctrl_cmd.unwrap_or(true),
         speed,
         edge_delay: Duration::from_millis(edge_delay_ms),
-        edge_bar: config.edge_bar.unwrap_or(true),
         pin: flags.pin,
         data_dir: config.data_dir.unwrap_or_else(identity::default_dir),
         forget_peers: flags.forget_peers,

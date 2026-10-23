@@ -10,6 +10,7 @@
 // On Windows a window program, so double-clicking it opens no console.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod autostart;
 mod config;
 mod edgebar;
 mod engine;
@@ -20,6 +21,7 @@ mod net;
 mod pairing;
 mod theme;
 mod tls;
+mod tray;
 
 use std::process::ExitCode;
 use std::sync::{Arc, mpsc};
@@ -31,8 +33,9 @@ use net::PinSource;
 fn main() -> ExitCode {
     // Old macOS versions pass a process serial number to apps started from Finder.
     let args: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with("-psn_")).collect();
-    if args.is_empty() || args == ["--gui"] {
-        return match gui::run() {
+    let at_login = args == [autostart::ARG];
+    if args.is_empty() || args == ["--gui"] || at_login {
+        return match gui::run(at_login) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");
