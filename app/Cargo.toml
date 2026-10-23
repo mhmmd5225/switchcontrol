@@ -10,6 +10,7 @@ sc-core.workspace = true
 sc-platform.workspace = true
 sc-proto.workspace = true
 serde.workspace = true
+postcard.workspace = true
 toml.workspace = true
 rcgen.workspace = true
 ring.workspace = true

@@ -18,9 +18,10 @@ use sc_platform::sys;
 
 use crate::autostart;
 use crate::config::{self, FileConfig, RunFlags};
+use crate::discovery::Listener;
 use crate::edgebar::{EdgeBar, Strip};
 use crate::engine::{Engine, LinkState, Report};
-use crate::identity::{self, TrustStore};
+use crate::identity::{self, Fingerprint, TrustStore};
 use crate::net::{self, PinSource, Waiting};
 use crate::pairing::normalize_pin;
 use crate::theme::{self, Link, Palette};
@@ -86,6 +87,7 @@ struct Form {
     edge_delay_ms: u64,
     edge_bar: bool,
     clipboard: bool,
+    announce: bool,
     /// Kept from the file; the window has no field for it.
     listen: Option<String>,
 }
@@ -109,6 +111,7 @@ impl Form {
             edge_delay_ms: file.edge_delay_ms.unwrap_or(0),
             edge_bar: file.edge_bar.unwrap_or(true),
             clipboard: file.clipboard.unwrap_or(true),
+            announce: file.announce.unwrap_or(true),
             listen: file.listen,
         }
     }
@@ -125,6 +128,7 @@ impl Form {
             edge_delay_ms: Some(self.edge_delay_ms),
             edge_bar: Some(self.edge_bar),
             clipboard: Some(self.clipboard),
+            announce: Some(self.announce),
             data_dir: None,
         }
     }
@@ -171,7 +175,8 @@ pub struct GuiApp {
     error: Option<String>,
     perms: Permissions,
     perms_checked: Instant,
-    paired: usize,
+    /// Fingerprints of the paired computers.
+    paired: Vec<Fingerprint>,
     local_ip: Option<IpAddr>,
     edge_bar: EdgeBar,
     /// Where the edge bar goes, if it is on. Its window stays open even while
@@ -196,7 +201,7 @@ impl GuiApp {
         GuiApp {
             ctx,
             form: Form::from_file(file),
-            paired: paired_count(&data_dir),
+            paired: paired_list(&data_dir),
             data_dir,
             dry_run,
             running: None,
@@ -221,7 +226,10 @@ impl GuiApp {
     /// Started at login: go to the tray and share with the saved settings.
     fn launched_at_login(&mut self) {
         self.hide_on_first_frame = self.tray.is_some();
-        if self.form.mode == Mode::Listen || !self.form.address.trim().is_empty() {
+        if self.form.mode == Mode::Listen
+            || !self.form.address.trim().is_empty()
+            || !self.paired.is_empty()
+        {
             self.start();
         }
     }
@@ -279,7 +287,11 @@ impl GuiApp {
 
     fn start(&mut self) {
         self.error = None;
-        if self.form.mode == Mode::Connect && self.form.address.trim().is_empty() {
+        // Without an address only a paired computer heard on the network will do.
+        if self.form.mode == Mode::Connect
+            && self.form.address.trim().is_empty()
+            && self.paired.is_empty()
+        {
             self.error = Some("Bağlanılacak bilgisayarın adresini girin.".into());
             return;
         }
@@ -335,7 +347,7 @@ impl GuiApp {
         self.view.remote = false;
         self.view.show_pin = None;
         self.view.ask_pin = None;
-        self.paired = paired_count(&self.data_dir);
+        self.paired = paired_list(&self.data_dir);
     }
 
     fn answer_pin(&mut self, pin: Option<String>) {
@@ -366,7 +378,7 @@ impl GuiApp {
                     self.view.show_pin = None;
                     self.view.ask_pin = None;
                     if matches!(state, LinkState::Connected { .. }) {
-                        self.paired = paired_count(&self.data_dir);
+                        self.paired = paired_list(&self.data_dir);
                     } else {
                         self.view.remote = false;
                     }
@@ -410,7 +422,15 @@ impl GuiApp {
                 ("Bağlantı bekleniyor".into(), detail, Link::Waiting)
             }
             (Some(_), Some(LinkState::Waiting(Waiting::Connecting(addr)))) => {
-                ("Bağlanıyor…".into(), addr.clone(), Link::Waiting)
+                if addr.is_empty() {
+                    (
+                        "Eşleşmiş bilgisayar aranıyor…".into(),
+                        "Ağda görünen eşleşmiş bilgisayara kendiliğinden bağlanılacak.".into(),
+                        Link::Waiting,
+                    )
+                } else {
+                    ("Bağlanıyor…".into(), addr.clone(), Link::Waiting)
+                }
             }
             (Some(_), Some(LinkState::Connected { peer, .. })) => {
                 if self.view.remote {
@@ -565,6 +585,7 @@ impl GuiApp {
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
         let enabled = self.running.is_none();
         let local_ip = self.local_ip;
+        let paired = &self.paired;
         let form = &mut self.form;
         ui.add_enabled_ui(enabled, |ui| {
             theme::section(ui, "Bağlantı");
@@ -580,13 +601,19 @@ impl GuiApp {
                 match form.mode {
                     Mode::Connect => {
                         let (label, edit) = theme::row(ui, "Adres", |ui| {
+                            let hint = if paired.is_empty() {
+                                "192.168.1.20"
+                            } else {
+                                "boş: kendisi bulur"
+                            };
                             ui.add(
                                 egui::TextEdit::singleline(&mut form.address)
-                                    .hint_text("192.168.1.20")
+                                    .hint_text(hint)
                                     .desired_width(180.0),
                             )
                         });
                         edit.labelled_by(label.id);
+                        found_ui(ui, &mut form.address, paired);
                     }
                     Mode::Listen => {
                         theme::row(ui, "Bu bilgisayarın adresi", |ui| match local_ip {
@@ -599,6 +626,11 @@ impl GuiApp {
                             None => {
                                 ui.label(RichText::new("bulunamadı").weak());
                             }
+                        });
+                        theme::divider(ui);
+                        let announce = "Ağda görünür ol";
+                        theme::row(ui, announce, |ui| {
+                            theme::switch(ui, &mut form.announce, announce)
                         });
                     }
                 }
@@ -662,8 +694,8 @@ impl GuiApp {
         theme::section(ui, "Güvenlik");
         theme::card(ui, |ui| {
             let mut forget = false;
-            theme::row(ui, &format!("Eşleşmiş bilgisayar: {}", self.paired), |ui| {
-                let can_forget = !running && self.paired > 0;
+            theme::row(ui, &format!("Eşleşmiş bilgisayar: {}", self.paired.len()), |ui| {
+                let can_forget = !running && !self.paired.is_empty();
                 forget =
                     ui.add_enabled(can_forget, egui::Button::new("Eşleşmeleri unut")).clicked();
             });
@@ -672,7 +704,7 @@ impl GuiApp {
                     Ok(()) => self.push_log("forgot all paired computers".into()),
                     Err(e) => self.error = Some(format!("Eşleşmeler silinemedi: {e}")),
                 }
-                self.paired = paired_count(&self.data_dir);
+                self.paired = paired_list(&self.data_dir);
             }
             ui.label(
                 RichText::new(
@@ -806,8 +838,46 @@ impl eframe::App for GuiApp {
     }
 }
 
-fn paired_count(dir: &Path) -> usize {
-    TrustStore::load(dir).map(|t| t.len()).unwrap_or(0)
+/// The computers heard on the network; picking one fills in its address.
+fn found_ui(ui: &mut egui::Ui, address: &mut String, paired: &[Fingerprint]) {
+    let listener = Listener::global();
+    let ctx = ui.ctx().clone();
+    listener.set_waker(move || ctx.request_repaint());
+    // Drops computers that went quiet even when nothing new arrives.
+    ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
+
+    let p = Palette::of(ui);
+    theme::divider(ui);
+    ui.label(RichText::new("Ağda bulunanlar").small().color(p.muted));
+    let found = listener.peers();
+    if found.is_empty() {
+        ui.label(
+            RichText::new("Aranıyor… Diğer bilgisayarda Bağlantı bekle ile Başlat'a basın.")
+                .small()
+                .weak(),
+        );
+    }
+    for computer in found {
+        let os = match computer.os {
+            sc_proto::Os::Windows => "Windows",
+            sc_proto::Os::MacOs => "Mac",
+            sc_proto::Os::Other => "Linux",
+        };
+        let addr = computer.addr.to_string();
+        theme::row(ui, &format!("{} ({os})", computer.name), |ui| {
+            if ui.add_enabled(*address != addr, egui::Button::new("Seç").small()).clicked() {
+                *address = addr.clone();
+            }
+            if paired.contains(&computer.fingerprint) {
+                ui.label(RichText::new("eşleşmiş").small().color(p.green));
+            }
+            ui.label(RichText::new(computer.addr.ip().to_string()).small().weak());
+        });
+    }
+}
+
+fn paired_list(dir: &Path) -> Vec<Fingerprint> {
+    TrustStore::load(dir).map(|t| t.fingerprints()).unwrap_or_default()
 }
 
 /// The address other computers on the LAN reach us at. Connecting a UDP
@@ -914,6 +984,7 @@ mod tests {
                 name: Some("Peer".into()),
                 side: Some("left".into()),
                 listen: Some(format!("127.0.0.1:{port}")),
+                announce: Some(false),
                 data_dir: Some(peer_dir.clone()),
                 ..FileConfig::default()
             },
@@ -948,7 +1019,7 @@ mod tests {
         harness.get_by_label("Eşleştir").click();
         step_until(&mut harness, "the connection", |app| connected_to(app).is_some());
         assert_eq!(connected_to(harness.state()), Some("Peer"));
-        assert_eq!(harness.state().paired, 1);
+        assert_eq!(harness.state().paired.len(), 1);
         harness.get_by_label("Bağlı: Peer");
 
         harness.get_by_label("Durdur").click();
@@ -962,6 +1033,16 @@ mod tests {
         assert!(harness.state().view.ask_pin.is_none());
         let saved = config::load(&gui_dir.join(SETTINGS_FILE)).unwrap();
         assert_eq!(saved.connect, Some(format!("127.0.0.1:{port}")));
+
+        // Paired now: an empty address is allowed, it means "find it on the network".
+        harness.get_by_label("Durdur").click();
+        harness.run_steps(2);
+        harness.state_mut().form.address.clear();
+        harness.step();
+        harness.get_by_label("Başlat").click();
+        harness.run_steps(2);
+        assert!(harness.state().running.is_some());
+        assert!(harness.state().error.is_none());
 
         drop(harness);
         peer.stop();

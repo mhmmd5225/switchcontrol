@@ -13,6 +13,7 @@
 mod autostart;
 mod clipboard;
 mod config;
+mod discovery;
 mod edgebar;
 mod engine;
 mod gui;

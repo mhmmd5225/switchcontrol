@@ -13,10 +13,11 @@ use std::time::{Duration, Instant};
 use sc_core::{Action, Config, EdgeHint, Node};
 use sc_platform::sys::{self, Capture, Injector};
 use sc_platform::{CaptureEvent, InputEvent};
-use sc_proto::{Message, Os};
+use sc_proto::{DEFAULT_PORT, Message, Os};
 
 use crate::clipboard;
-use crate::config::Settings;
+use crate::config::{NetMode, Settings};
+use crate::discovery::{Announcer, Beacon};
 use crate::identity::{Identity, TrustStore};
 use crate::keyguard::KeyGuard;
 use crate::net::{self, Link, NetContext, NetEvent, PinSource, Waiting};
@@ -153,6 +154,18 @@ fn run(
         trust.len(),
         data_dir.display()
     ));
+
+    // Lets the other computer find this one; stops with the engine.
+    let _announcer = match &settings.net {
+        NetMode::Listen(addr) if settings.announce => {
+            let port = addr.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT);
+            let beacon = Beacon::new(&settings.name, port, identity.fingerprint);
+            Announcer::start(beacon)
+                .map_err(|e| log(format!("cannot announce on the network: {e}")))
+                .ok()
+        }
+        _ => None,
+    };
 
     let ctx =
         NetContext { tls: TlsConfig::new(&identity)?, trust: Arc::new(Mutex::new(trust)), pin };

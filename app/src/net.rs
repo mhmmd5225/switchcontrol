@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use sc_proto::{Auth, Hello, Message, PROTOCOL_VERSION, read_frame, write_frame};
 
 use crate::config::NetMode;
+use crate::discovery::Listener;
 use crate::engine::AppEvent;
 use crate::identity::{Fingerprint, TrustStore};
 use crate::pairing::{self, Role};
@@ -177,7 +178,7 @@ pub fn spawn(
                         continue;
                     }
                 },
-                (NetMode::Connect(addr), _) => match connect(addr) {
+                (NetMode::Connect(addr), _) => match connect_any(&candidates(addr, &ctx)) {
                     Ok(stream) => (stream, Role::Client),
                     Err(_) => {
                         if !shared.pause(RETRY_DELAY) {
@@ -230,6 +231,34 @@ pub fn spawn(
         }
     })?;
     Ok(NetHandle { shared, thread: Some(thread) })
+}
+
+/// Where to try to connect: the configured address first, then paired
+/// computers heard on the local network (their address may have changed).
+fn candidates(addr: &str, ctx: &NetContext) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if !addr.is_empty() {
+        out.push(addr.to_string());
+    }
+    let trust = ctx.trust.lock().unwrap();
+    for found in Listener::global().peers() {
+        let found_addr = found.addr.to_string();
+        if trust.contains(&found.fingerprint) && !out.contains(&found_addr) {
+            out.push(found_addr);
+        }
+    }
+    out
+}
+
+fn connect_any(addrs: &[String]) -> io::Result<TcpStream> {
+    let mut last = io::Error::new(io::ErrorKind::NotFound, "no paired computer found");
+    for addr in addrs {
+        match connect(addr) {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
 }
 
 fn connect(addr: &str) -> io::Result<TcpStream> {

@@ -30,6 +30,15 @@ Kısaltmalar: **W** = Windows bilgisayar, **M** = Mac.
 | 2.2 | M: **Rol: Bağlan**, **Adres**: W'nin IP'si, **Diğer bilgisayar**: W hangi taraftaysa (ör. Solda). **Başlat**. | Daha önce eşleştiyseniz doğrudan "Bağlı". Eşleşmediyseniz W'de 6 haneli PIN, M'de PIN sorusu çıkar. |
 | 2.3 | (PIN sorulduysa) W'deki PIN'i M'ye yazıp **Eşleştir**. | İki tarafta da "Bağlı: …"; çizimde yeşil çizgi, klavyenin olduğu bilgisayar mavi çerçeveli. |
 
+## 2b. Ağda otomatik bulma
+
+| # | Adım | Beklenen |
+|---|---|---|
+| 2b.1 | W'de Bağlantı bekle ile **Başlat**. M'de Rol: **Bağlan**, henüz Başlat'a basmayın. | M'de "Ağda bulunanlar" altında W'nin adı, işletim sistemi ve IP'si birkaç saniye içinde görünür (eşleştiyseniz yeşil "eşleşmiş"). Windows güvenlik duvarı sorarsa izin verin. |
+| 2b.2 | M'de listede **Seç**. | Adres alanı dolar. |
+| 2b.3 | (Eşleşmiş olmalı) M'de adres alanını boşaltıp **Başlat**. | Durum "Eşleşmiş bilgisayar aranıyor…", birkaç saniye içinde "Bağlı". |
+| 2b.4 | W'de **Ağda görünür ol** anahtarını kapatıp (Durdur > kapat > Başlat) M'deki listeye bakın. | En geç 7 saniyede W listeden kaybolur. |
+
 ## 3. Geçiş ve kenar çubuğu
 
 Aşağıda klavye ve farenin W'ye bağlı olduğu varsayıldı. Mac'in klavyesini kullanıyorsanız W ile M'yi yer değiştirerek okuyun.

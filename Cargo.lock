@@ -3454,6 +3454,7 @@ dependencies = [
  "eframe",
  "egui_kittest",
  "embed-resource",
+ "postcard",
  "rcgen",
  "ring",
  "rustls",

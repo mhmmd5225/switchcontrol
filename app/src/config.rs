@@ -21,6 +21,7 @@ usage: switchcontrol --side left|right [--listen ADDR | --connect ADDR] [options
   --no-swap           keep Ctrl and Cmd/Win as they are
   --edge-delay MS     push against the edge this long before crossing (default 0)
   --no-clipboard      do not share clipboard text with the other computer
+  --no-announce       do not make this computer visible on the local network
   --config FILE       read these settings from a TOML file (flags win)
   --pin PIN           PIN for pairing, instead of typing it when asked
   --data-dir DIR      where this computer's certificate and paired peers live
@@ -49,6 +50,8 @@ pub struct Settings {
     pub edge_delay: Duration,
     /// Share clipboard text when control passes between the computers.
     pub clipboard: bool,
+    /// While listening, announce this computer on the local network.
+    pub announce: bool,
     pub pin: Option<String>,
     pub data_dir: PathBuf,
     pub forget_peers: bool,
@@ -69,6 +72,7 @@ pub struct FileConfig {
     pub swap_ctrl_cmd: Option<bool>,
     pub edge_delay_ms: Option<u64>,
     pub clipboard: Option<bool>,
+    pub announce: Option<bool>,
     /// Draw a bar at the shared edge when the cursor comes near (window only).
     pub edge_bar: Option<bool>,
     pub data_dir: Option<PathBuf>,
@@ -102,6 +106,7 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
             }
             "--no-swap" => cli.swap_ctrl_cmd = Some(false),
             "--no-clipboard" => cli.clipboard = Some(false),
+            "--no-announce" => cli.announce = Some(false),
             "--edge-delay" => {
                 let raw = value()?;
                 cli.edge_delay_ms = Some(
@@ -138,6 +143,7 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
         swap_ctrl_cmd: cli.swap_ctrl_cmd.or(file.swap_ctrl_cmd),
         edge_delay_ms: cli.edge_delay_ms.or(file.edge_delay_ms),
         clipboard: cli.clipboard.or(file.clipboard),
+        announce: cli.announce.or(file.announce),
         edge_bar: file.edge_bar,
         data_dir: cli.data_dir.or(file.data_dir),
     };
@@ -175,6 +181,7 @@ pub fn resolve(config: FileConfig, flags: RunFlags) -> Result<Settings, String> 
         speed,
         edge_delay: Duration::from_millis(edge_delay_ms),
         clipboard: config.clipboard.unwrap_or(true),
+        announce: config.announce.unwrap_or(true),
         pin: flags.pin,
         data_dir: config.data_dir.unwrap_or_else(identity::default_dir),
         forget_peers: flags.forget_peers,
@@ -196,8 +203,11 @@ pub fn save(path: &Path, config: &FileConfig) -> Result<(), String> {
     std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Adds the default port. An empty address stays empty: it means "find a
+/// paired computer on the network".
 fn with_port(addr: String) -> String {
-    if addr.contains(':') { addr } else { format!("{addr}:{DEFAULT_PORT}") }
+    let addr = addr.trim().to_string();
+    if addr.is_empty() || addr.contains(':') { addr } else { format!("{addr}:{DEFAULT_PORT}") }
 }
 
 pub fn default_name() -> String {
