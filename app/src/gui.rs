@@ -604,13 +604,15 @@ impl GuiApp {
 
     /// Who connects to whom: everything needed to press Başlat.
     fn connection_ui(&mut self, ui: &mut egui::Ui) {
+        // Settings are locked while sharing runs, row by row: this computer's
+        // address stays copyable, which is when it is needed.
         let enabled = self.running.is_none();
         let local_ip = self.local_ip;
         let paired = &self.paired;
         let form = &mut self.form;
-        ui.add_enabled_ui(enabled, |ui| {
-            ui.add_space(8.0);
-            theme::card(ui, |ui| {
+        ui.add_space(8.0);
+        theme::card(ui, |ui| {
+            ui.add_enabled_ui(enabled, |ui| {
                 theme::row(ui, "Rol", |ui| {
                     theme::segmented(
                         ui,
@@ -618,9 +620,11 @@ impl GuiApp {
                         &[(Mode::Listen, "Bağlantı bekle"), (Mode::Connect, "Bağlan")],
                     )
                 });
-                theme::divider(ui);
-                match form.mode {
-                    Mode::Connect => {
+            });
+            theme::divider(ui);
+            match form.mode {
+                Mode::Connect => {
+                    ui.add_enabled_ui(enabled, |ui| {
                         let (label, edit) = theme::row(ui, "Adres", |ui| {
                             let hint = if paired.is_empty() {
                                 "192.168.1.20"
@@ -637,27 +641,31 @@ impl GuiApp {
                         });
                         edit.labelled_by(label.id);
                         found_ui(ui, &mut form.address, paired);
-                    }
-                    Mode::Listen => {
-                        theme::row(ui, "Bu bilgisayarın adresi", |ui| match local_ip {
-                            Some(ip) => {
-                                if theme::button(ui, "Kopyala", Kind::Ghost).clicked() {
-                                    ui.ctx().copy_text(ip.to_string());
-                                }
-                                ui.label(theme::semibold(ip.to_string()));
+                    });
+                }
+                Mode::Listen => {
+                    theme::row(ui, "Bu bilgisayarın adresi", |ui| match local_ip {
+                        Some(ip) => {
+                            if theme::button(ui, "Kopyala", Kind::Ghost).clicked() {
+                                ui.ctx().copy_text(ip.to_string());
                             }
-                            None => {
-                                ui.label(RichText::new("bulunamadı").weak());
-                            }
-                        });
-                        theme::divider(ui);
+                            ui.label(theme::semibold(ip.to_string()));
+                        }
+                        None => {
+                            ui.label(RichText::new("bulunamadı").weak());
+                        }
+                    });
+                    theme::divider(ui);
+                    ui.add_enabled_ui(enabled, |ui| {
                         let announce = "Ağda görünür ol";
                         theme::row(ui, announce, |ui| {
                             theme::switch(ui, &mut form.announce, announce)
                         });
-                    }
+                    });
                 }
-                theme::divider(ui);
+            }
+            theme::divider(ui);
+            ui.add_enabled_ui(enabled, |ui| {
                 theme::row(ui, "Diğer bilgisayar", |ui| {
                     theme::segmented(
                         ui,
