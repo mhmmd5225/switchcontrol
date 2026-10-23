@@ -93,7 +93,10 @@ impl Listener {
     }
 
     fn start(bind: SocketAddr) -> io::Result<Arc<Listener>> {
-        let socket = UdpSocket::bind(bind)?;
+        Listener::start_on(UdpSocket::bind(bind)?)
+    }
+
+    fn start_on(socket: UdpSocket) -> io::Result<Arc<Listener>> {
         let listener = Arc::new(Listener::empty());
         let shared = listener.clone();
         thread::Builder::new().name("sc-discovery".into()).spawn(move || {
@@ -212,8 +215,10 @@ mod tests {
 
     #[test]
     fn announced_computers_are_found() {
-        let port = UdpSocket::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let listener = Listener::start(SocketAddr::from(([127, 0, 0, 1], port))).unwrap();
+        // Bound here and handed over, so no other socket can take the port meanwhile.
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = socket.local_addr().unwrap().port();
+        let listener = Listener::start_on(socket).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         listener.set_waker(move || {
             let _ = tx.send(());
