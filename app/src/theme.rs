@@ -641,7 +641,7 @@ pub fn text_field(
                         .hint_text(hint)
                         .font(style)
                         .frame(egui::Frame::NONE)
-                        .vertical_align(egui::Align::Center)
+                        .align(egui::Align2::LEFT_CENTER)
                         .min_size(Vec2::new(inner.width(), height))
                         .desired_width(inner.width()),
                 )
