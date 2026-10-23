@@ -15,6 +15,7 @@ use sc_platform::sys::{self, Capture, Injector};
 use sc_platform::{CaptureEvent, InputEvent};
 use sc_proto::{Message, Os};
 
+use crate::clipboard;
 use crate::config::Settings;
 use crate::identity::{Identity, TrustStore};
 use crate::keyguard::KeyGuard;
@@ -167,6 +168,7 @@ fn run(
         settings: &settings,
         report,
         keys: KeyGuard::default(),
+        clipboard: clipboard::Share::new(clipboard::System::default(), settings.clipboard),
     };
     let mut result = Ok(());
     for event in rx {
@@ -253,6 +255,7 @@ struct Out<'a> {
     settings: &'a Settings,
     report: &'a Reporter,
     keys: KeyGuard,
+    clipboard: clipboard::Share<clipboard::System>,
 }
 
 impl Out<'_> {
@@ -320,6 +323,21 @@ impl Out<'_> {
                 (self.report)(Report::Remote(on));
             }
             Action::Edge(hint) => (self.report)(Report::Edge(hint)),
+            Action::ShareClipboard => match self.clipboard.outgoing() {
+                Ok(msg) => {
+                    if let Message::Clipboard { text } = &msg {
+                        self.log(format!("clipboard sent ({} characters)", text.chars().count()));
+                    }
+                    self.apply(Action::Send(msg));
+                }
+                Err(None) => {}
+                Err(Some(why)) => self.log(why),
+            },
+            Action::SetClipboard(text) => {
+                if let Some(line) = self.clipboard.incoming(text) {
+                    self.log(line);
+                }
+            }
             Action::Log(text) => self.log(text),
         }
     }

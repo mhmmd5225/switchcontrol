@@ -406,3 +406,28 @@ fn round_trip_between_two_nodes() {
         ]
     );
 }
+
+#[test]
+fn clipboard_goes_along_with_control() {
+    // Crossing over shares this machine's clipboard, before the peer takes over.
+    let mut pc = pc();
+    let actions = pc.local_input(moved(2559, 720));
+    let share = actions.iter().position(|a| *a == Action::ShareClipboard).unwrap();
+    let enter = actions.iter().position(|a| matches!(a, Action::Send(Message::Enter { .. })));
+    assert!(share < enter.unwrap());
+
+    // Getting control back makes the peer share its clipboard.
+    let mut mac = mac();
+    mac.peer_message(Message::Enter { x: 0, y: 0 });
+    assert!(mac.peer_message(Message::Leave).contains(&Action::ShareClipboard));
+    // A Leave without having been controlled shares nothing.
+    assert!(!mac.peer_message(Message::Leave).contains(&Action::ShareClipboard));
+}
+
+#[test]
+fn received_clipboard_is_set_at_any_time() {
+    let mut mac = mac();
+    let text = "kopyalanan metin".to_string();
+    let actions = mac.peer_message(Message::Clipboard { text: text.clone() });
+    assert_eq!(actions, vec![Action::SetClipboard(text)]);
+}

@@ -17,6 +17,7 @@ Program argümansız açılınca (ör. Finder'dan çift tıklayınca) bir pencer
 - **Bağlantı**: bir taraf *Bağlantı bekle*, diğeri *Bağlan* seçer. Bekleyen taraf kendi adresini gösterir, bağlanan taraf bu adresi *Adres* alanına yazar.
 - **Başlat / Durdur**: başlık satırı durumu gösterir (bekleniyor, bağlanılıyor, bağlı, klavye ve fare karşı tarafta).
 - **Geçiş**: *Kenara değince* hemen geçer; *Kısa itince* / *Uzun itince* imlecin kenara 0,3 / 0,6 saniye itilmesini bekler (kenardaki kaydırma çubuğu ve düğmelerde yanlışlıkla geçmeyi önler).
+- **Pano paylaşımı**: imleç diğer bilgisayara geçerken kopyalanan metin de oraya aktarılır; geri dönerken o tarafta kopyalanan metin geri gelir (en fazla 1 MB, yalnızca metin).
 - **Kenar çubuğu**: imleç diğer bilgisayara açılan kenara yaklaşınca orada parlayan bir çubuk belirir; itildikçe ortadan dolar. Çubuk tıklamaları engellemez.
 - **Eşleştirme**: ilk bağlantıda bekleyen tarafın penceresinde 6 haneli PIN çıkar, bağlanan tarafın penceresinde PIN sorulur.
 - **Günlük**: ayrıntılı kayıtlar.
@@ -68,6 +69,7 @@ switchcontrol --side left --connect 192.168.1.20
 | `--name NAME` | Karşıya gösterilen ad (varsayılan bilgisayar adı) |
 | `--speed F` | Karşı ekrandaki imleç hızı çarpanı (varsayılan 1.0) |
 | `--no-swap` | Ctrl ↔ Cmd/Win değişimini kapat |
+| `--no-clipboard` | Pano paylaşımını kapat |
 | `--edge-delay MS` | Geçmeden önce imlecin kenara bu kadar milisaniye itilmesini bekle (varsayılan 0) |
 | `--config FILE` | Aynı ayarları TOML dosyasından oku (`side = "right"`, `connect = "..."`); komut satırı önceliklidir |
 | `--pin PIN` | Eşleştirme PIN'i; verilmezse gerektiğinde sorulur |
@@ -79,6 +81,8 @@ switchcontrol --side left --connect 192.168.1.20
 Windows'tan gelen Ctrl, Mac'te Cmd olur (ve tersi). Mac klavyesiyle Windows'u kullanırken Cmd tek başına basılıp bırakılırsa Windows tuşu gibi davranır (Başlat menüsü); başka bir tuşla birlikte (Cmd+C) Ctrl olarak kalır. Tuşlar fiziksel konumlarıyla taşınır, bu yüzden iki makinede de aynı klavye düzeni (ör. Türkçe Q) seçili olmalı.
 
 ### Gizlilik
+
+Pano yalnızca imleç bilgisayarlar arasında geçerken ve yalnızca şifreli bağlantı üzerinden gönderilir; günlüğe metnin kendisi değil yalnızca uzunluğu yazılır. *Pano paylaşımı* anahtarı kapalı olan taraf pano göndermez ve almaz.
 
 Kontrol kendi bilgisayarınızdayken program klavyeyi hiç dinlemez; yalnızca kenarı bulmak için imleç konumunu izler ve bunu ağa göndermez. Klavye ve fare yalnızca imleç diğer bilgisayara geçtiğinde yakalanıp şifreli olarak gönderilir.
 

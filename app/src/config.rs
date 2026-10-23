@@ -20,6 +20,7 @@ usage: switchcontrol --side left|right [--listen ADDR | --connect ADDR] [options
   --speed F           pointer speed on the peer (default 1.0)
   --no-swap           keep Ctrl and Cmd/Win as they are
   --edge-delay MS     push against the edge this long before crossing (default 0)
+  --no-clipboard      do not share clipboard text with the other computer
   --config FILE       read these settings from a TOML file (flags win)
   --pin PIN           PIN for pairing, instead of typing it when asked
   --data-dir DIR      where this computer's certificate and paired peers live
@@ -46,6 +47,8 @@ pub struct Settings {
     pub swap_ctrl_cmd: bool,
     pub speed: f64,
     pub edge_delay: Duration,
+    /// Share clipboard text when control passes between the computers.
+    pub clipboard: bool,
     pub pin: Option<String>,
     pub data_dir: PathBuf,
     pub forget_peers: bool,
@@ -65,6 +68,7 @@ pub struct FileConfig {
     pub speed: Option<f64>,
     pub swap_ctrl_cmd: Option<bool>,
     pub edge_delay_ms: Option<u64>,
+    pub clipboard: Option<bool>,
     /// Draw a bar at the shared edge when the cursor comes near (window only).
     pub edge_bar: Option<bool>,
     pub data_dir: Option<PathBuf>,
@@ -97,6 +101,7 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
                 cli.speed = Some(raw.parse().map_err(|_| format!("--speed: not a number: {raw}"))?);
             }
             "--no-swap" => cli.swap_ctrl_cmd = Some(false),
+            "--no-clipboard" => cli.clipboard = Some(false),
             "--edge-delay" => {
                 let raw = value()?;
                 cli.edge_delay_ms = Some(
@@ -132,6 +137,7 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
         speed: cli.speed.or(file.speed),
         swap_ctrl_cmd: cli.swap_ctrl_cmd.or(file.swap_ctrl_cmd),
         edge_delay_ms: cli.edge_delay_ms.or(file.edge_delay_ms),
+        clipboard: cli.clipboard.or(file.clipboard),
         edge_bar: file.edge_bar,
         data_dir: cli.data_dir.or(file.data_dir),
     };
@@ -168,6 +174,7 @@ pub fn resolve(config: FileConfig, flags: RunFlags) -> Result<Settings, String> 
         swap_ctrl_cmd: config.swap_ctrl_cmd.unwrap_or(true),
         speed,
         edge_delay: Duration::from_millis(edge_delay_ms),
+        clipboard: config.clipboard.unwrap_or(true),
         pin: flags.pin,
         data_dir: config.data_dir.unwrap_or_else(identity::default_dir),
         forget_peers: flags.forget_peers,
@@ -229,7 +236,9 @@ mod tests {
         assert_eq!(s.side, Side::Right);
         assert_eq!(s.net, NetMode::Listen("0.0.0.0:24800".into()));
         assert!(s.swap_ctrl_cmd);
+        assert!(s.clipboard);
         assert_eq!(s.speed, 1.0);
+        assert!(!parse("--side right --no-clipboard").unwrap().clipboard);
     }
 
     #[test]

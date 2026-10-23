@@ -63,6 +63,10 @@ pub enum Action {
     Grab(bool),
     /// Show the edge bar, or hide it.
     Edge(Option<EdgeHint>),
+    /// Control passes to the peer: send it this machine's clipboard text.
+    ShareClipboard,
+    /// The peer shared its clipboard text: put it on this machine's clipboard.
+    SetClipboard(String),
     Log(String),
 }
 
@@ -226,10 +230,13 @@ impl Node {
             Message::Leave => {
                 self.release_injected(&mut out);
                 if std::mem::take(&mut self.controlled) {
+                    // Control goes back: whatever was copied here goes with it.
+                    out.push(Action::ShareClipboard);
                     out.push(Action::Log("peer released control".into()));
                 }
             }
             Message::ReleaseAll => self.release_injected(&mut out),
+            Message::Clipboard { text } => out.push(Action::SetClipboard(text)),
             _ if !self.controlled => {}
             Message::MouseMove { x, y } => out.push(Action::Inject(InputEvent::MouseMove { x, y })),
             Message::Button { button, down } => {
@@ -303,6 +310,7 @@ impl Node {
 
         let peer_y = map_span(y, from, to);
         out.push(Action::Grab(true));
+        out.push(Action::ShareClipboard);
         out.push(Action::Send(Message::Enter { x: peer_x, y: peer_y }));
         out.push(Action::Log(format!("-> {} at ({peer_x}, {peer_y})", self.peer_name())));
         self.mode = Mode::Remote { x: peer_x as f64, y: peer_y as f64 };

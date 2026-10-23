@@ -54,6 +54,17 @@ Aşağıda klavye ve farenin W'ye bağlı olduğu varsayıldı. Mac'in klavyesin
 | 4.4 | Takılı tuş: klavye M'de, W'deyken W'de Görev Yöneticisi'ni öne getirin; Cmd veya Ctrl'ye basıp bırakın; sonra başka bir pencereye tıklayın. | Hiçbir tuş basılı kalmaz. Kaldıysa en geç birkaç saniyede bırakılır; Günlük'te `key … was still down; released it again` satırı olabilir. |
 | 4.5 | Kontrol kendi bilgisayarınızdayken normal yazın. | Hiçbir şey karşı tarafa gitmez (program kendi bilgisayarınızda klavyeyi dinlemiyor). |
 
+## 4b. Pano paylaşımı
+
+İki tarafın da bu sürümle çalışması gerekir (eski sürümle bağlanınca Günlük'te "peer speaks protocol 2, we speak 3" yazar).
+
+| # | Adım | Beklenen |
+|---|---|---|
+| 4b.1 | Klavyenin olduğu bilgisayarda bir metin kopyalayın, imleci diğer bilgisayara geçirin, orada yapıştırın. | Kopyaladığınız metin yapıştırılır. Günlük: "clipboard sent (N characters)" / "clipboard received (N characters)". |
+| 4b.2 | Diğer bilgisayardayken orada başka bir metin kopyalayın, imleci geri getirin, kendi bilgisayarınızda yapıştırın. | O metin yapıştırılır. |
+| 4b.3 | Türkçe karakterli ve çok satırlı bir metinle 4b.1'i tekrarlayın. | Metin aynen gelir. |
+| 4b.4 | Bir tarafta **Pano paylaşımı** anahtarını kapatıp (Durdur > kapat > Başlat) 4b.1'i tekrarlayın. | Metin aktarılmaz. |
+
 ## 5. Tepsi / menü çubuğu simgesi
 
 | # | Adım | Beklenen |

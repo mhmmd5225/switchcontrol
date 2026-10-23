@@ -85,6 +85,7 @@ struct Form {
     swap: bool,
     edge_delay_ms: u64,
     edge_bar: bool,
+    clipboard: bool,
     /// Kept from the file; the window has no field for it.
     listen: Option<String>,
 }
@@ -107,6 +108,7 @@ impl Form {
             swap: file.swap_ctrl_cmd.unwrap_or(true),
             edge_delay_ms: file.edge_delay_ms.unwrap_or(0),
             edge_bar: file.edge_bar.unwrap_or(true),
+            clipboard: file.clipboard.unwrap_or(true),
             listen: file.listen,
         }
     }
@@ -122,6 +124,7 @@ impl Form {
             swap_ctrl_cmd: Some(self.swap),
             edge_delay_ms: Some(self.edge_delay_ms),
             edge_bar: Some(self.edge_bar),
+            clipboard: Some(self.clipboard),
             data_dir: None,
         }
     }
@@ -640,6 +643,16 @@ impl GuiApp {
                 theme::divider(ui);
                 let bar = "Kenar çubuğu";
                 theme::row(ui, bar, |ui| theme::switch(ui, &mut form.edge_bar, bar));
+                theme::divider(ui);
+                let clip = "Pano paylaşımı";
+                theme::row(ui, clip, |ui| theme::switch(ui, &mut form.clipboard, clip));
+                ui.label(
+                    RichText::new(
+                        "Kopyalanan metin, imleç diğer bilgisayara geçerken oraya da aktarılır.",
+                    )
+                    .small()
+                    .weak(),
+                );
             });
         });
     }
