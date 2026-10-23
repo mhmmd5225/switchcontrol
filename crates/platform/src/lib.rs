@@ -7,7 +7,7 @@
 //! - `Capture::start() -> (Capture, Receiver<CaptureEvent>)`, `set_grab(bool)`
 //! - `Injector::new()`, `inject(&InputEvent)`
 //! - `monitors()`, `cursor_pos()`, `secure_input_active()`, `permissions()`,
-//!   `held_keys()`
+//!   `held_keys()`, `logical_keys()`
 
 mod event;
 

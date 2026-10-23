@@ -71,12 +71,19 @@ pub fn monitors() -> Vec<Monitor> {
         .collect()
 }
 
-/// HID usages of the keys macOS considers held right now.
+/// HID usages of the keys held on the keyboard right now.
 pub fn held_keys() -> Vec<u16> {
+    keys_down(ffi::kCGEventSourceStateHIDSystemState)
+}
+
+/// HID usages of the keys macOS treats as down, including injected ones.
+pub fn logical_keys() -> Vec<u16> {
+    keys_down(ffi::kCGEventSourceStateCombinedSessionState)
+}
+
+fn keys_down(state: ffi::CGEventSourceStateID) -> Vec<u16> {
     (0u16..0x80)
-        .filter(|&code| unsafe {
-            ffi::CGEventSourceKeyState(ffi::kCGEventSourceStateHIDSystemState, code)
-        })
+        .filter(|&code| unsafe { ffi::CGEventSourceKeyState(state, code) })
         .filter_map(sc_keymap::hid_from_mac)
         .collect()
 }

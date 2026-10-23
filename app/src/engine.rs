@@ -8,7 +8,7 @@ use std::net::SocketAddr;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sc_core::{Action, Config, EdgeHint, Node};
 use sc_platform::sys::{self, Capture, Injector};
@@ -17,6 +17,7 @@ use sc_proto::{Message, Os};
 
 use crate::config::Settings;
 use crate::identity::{Identity, TrustStore};
+use crate::keyguard::KeyGuard;
 use crate::net::{self, Link, NetContext, NetEvent, PinSource, Waiting};
 use crate::tls::TlsConfig;
 
@@ -160,7 +161,13 @@ fn run(
 
     let mut link: Option<Link> = None;
     let mut secure_input = false;
-    let mut out = Out { link: &mut link, io: &mut io, settings: &settings, report };
+    let mut out = Out {
+        link: &mut link,
+        io: &mut io,
+        settings: &settings,
+        report,
+        keys: KeyGuard::default(),
+    };
     let mut result = Ok(());
     for event in rx {
         let actions = match event {
@@ -204,6 +211,7 @@ fn run(
                 if out.link.is_some() {
                     actions.push(Action::Send(Message::Ping));
                 }
+                out.recheck_keys();
                 let now_secure = sys::secure_input_active();
                 if now_secure != secure_input {
                     secure_input = now_secure;
@@ -244,11 +252,26 @@ struct Out<'a> {
     io: &'a mut Io,
     settings: &'a Settings,
     report: &'a Reporter,
+    keys: KeyGuard,
 }
 
 impl Out<'_> {
     fn log(&self, text: String) {
         (self.report)(Report::Log(text));
+    }
+
+    /// Releases again any key we released that the OS still holds down.
+    fn recheck_keys(&mut self) {
+        if self.keys.is_idle() {
+            return;
+        }
+        let down = sys::logical_keys();
+        for usage in self.keys.check(&down, Instant::now()) {
+            if let Some(injector) = self.io.injector.as_mut() {
+                let _ = injector.inject(&InputEvent::Key { usage, down: false });
+            }
+            self.log(format!("key {usage:#04x} was still down; released it again"));
+        }
     }
 
     fn apply(&mut self, action: Action) {
@@ -269,6 +292,9 @@ impl Out<'_> {
                 Some(injector) => {
                     if let Err(e) = injector.inject(&ev) {
                         self.log(format!("inject {ev:?} failed: {e}"));
+                    }
+                    if let InputEvent::Key { usage, down } = ev {
+                        self.keys.injected(usage, down, Instant::now());
                     }
                 }
                 None => {

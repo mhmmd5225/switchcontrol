@@ -50,3 +50,9 @@ pub fn held_keys() -> Vec<u16> {
     keys.dedup();
     keys
 }
+
+/// HID usages of the keys Windows treats as down, including injected ones.
+/// `GetAsyncKeyState` already reports that state.
+pub fn logical_keys() -> Vec<u16> {
+    held_keys()
+}

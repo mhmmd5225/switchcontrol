@@ -12,6 +12,7 @@ mod edgebar;
 mod engine;
 mod gui;
 mod identity;
+mod keyguard;
 mod net;
 mod pairing;
 mod theme;

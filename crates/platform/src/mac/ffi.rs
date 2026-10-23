@@ -19,6 +19,7 @@ pub type CGEventFlags = u64;
 pub type CGError = i32;
 pub type CGEventSourceStateID = i32;
 
+pub const kCGEventSourceStateCombinedSessionState: CGEventSourceStateID = 0;
 pub const kCGEventSourceStateHIDSystemState: CGEventSourceStateID = 1;
 
 #[repr(C)]
