@@ -30,7 +30,7 @@ use crate::tray::{Tray, TrayCommand};
 const SETTINGS_FILE: &str = "settings.toml";
 const LOG_LINES: usize = 500;
 /// The window does not resize: both pages are laid out to fit it.
-const WINDOW_SIZE: (f32, f32) = (460.0, 780.0);
+const WINDOW_SIZE: (f32, f32) = (460.0, 800.0);
 
 /// The emergency hotkey as this OS spells it.
 const HOTKEY: &str =
@@ -93,6 +93,7 @@ struct Form {
     address: String,
     name: String,
     speed: f64,
+    scroll_speed: f64,
     swap: bool,
     edge_delay_ms: u64,
     edge_bar: bool,
@@ -117,6 +118,7 @@ impl Form {
             address: file.connect.unwrap_or_default(),
             name: file.name.unwrap_or_else(config::default_name),
             speed: file.speed.unwrap_or(1.0),
+            scroll_speed: file.scroll_speed.unwrap_or(1.0),
             swap: file.swap_ctrl_cmd.unwrap_or(true),
             edge_delay_ms: file.edge_delay_ms.unwrap_or(0),
             edge_bar: file.edge_bar.unwrap_or(true),
@@ -134,6 +136,7 @@ impl Form {
             listen: if connect { None } else { self.listen.clone() },
             connect: connect.then(|| self.address.trim().to_string()),
             speed: Some(self.speed),
+            scroll_speed: Some(self.scroll_speed),
             swap_ctrl_cmd: Some(self.swap),
             edge_delay_ms: Some(self.edge_delay_ms),
             edge_bar: Some(self.edge_bar),
@@ -693,6 +696,16 @@ impl GuiApp {
                     ui.label(format!("{:.2}×", form.speed));
                     ui.add(
                         egui::Slider::new(&mut form.speed, 0.25..=4.0)
+                            .logarithmic(true)
+                            .show_value(false),
+                    )
+                });
+                slider.labelled_by(label.id);
+                theme::divider(ui);
+                let (label, slider) = theme::row(ui, "Kaydırma hızı", |ui| {
+                    ui.label(format!("{:.2}×", form.scroll_speed));
+                    ui.add(
+                        egui::Slider::new(&mut form.scroll_speed, 0.25..=4.0)
                             .logarithmic(true)
                             .show_value(false),
                     )

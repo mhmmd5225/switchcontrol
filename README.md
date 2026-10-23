@@ -28,7 +28,7 @@ Ayarlar *Başlat*'a basınca veri klasöründeki `settings.toml` dosyasına kayd
 
 Windows'ta bildirim alanında, Mac'te menü çubuğunda bir SwitchControl simgesi durur. Menüsünde durum, *Başlat/Durdur*, *Pencereyi göster* ve *Çıkış* vardır (Windows'ta simgeye sol tıklamak pencereyi açar). Pencereyi kapatmak programı kapatmaz, simgeye indirir; programdan çıkmak için simgenin menüsünden *Çıkış*'ı seçin.
 
-*Uygulama > Oturum açılınca başlat* açıksa SwitchControl oturum açılınca simge olarak başlar ve kayıtlı ayarlarla bağlanır. Windows'ta kullanıcının başlangıç kaydına (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`), Mac'te `~/Library/LaunchAgents/com.switchcontrol.app.plist` dosyasına yazılır. Uygulamayı başka bir klasöre taşırsanız anahtarı kapatıp yeniden açın.
+*Ayarlar > Uygulama > Oturum açılınca başlat* açıksa SwitchControl oturum açılınca simge olarak başlar ve kayıtlı ayarlarla bağlanır. Windows'ta kullanıcının başlangıç kaydına (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`), Mac'te `~/Library/LaunchAgents/com.switchcontrol.app.plist` dosyasına yazılır. Uygulamayı başka bir klasöre taşırsanız anahtarı kapatıp yeniden açın.
 
 ### Mac uygulaması
 
@@ -68,6 +68,7 @@ switchcontrol --side left --connect 192.168.1.20
 | `--connect ADDR` | Diğerine bağlan; port verilmezse 24800 |
 | `--name NAME` | Karşıya gösterilen ad (varsayılan bilgisayar adı) |
 | `--speed F` | Karşı ekrandaki imleç hızı çarpanı (varsayılan 1.0) |
+| `--scroll-speed F` | Karşı ekrandaki kaydırma hızı çarpanı (varsayılan 1.0); penceredeki karşılığı *Ayarlar > Kaydırma hızı* |
 | `--no-swap` | Ctrl ↔ Cmd/Win değişimini kapat |
 | `--no-clipboard` | Pano paylaşımını kapat |
 | `--no-announce` | Bekleyen tarafta kendini yerel ağda duyurma |

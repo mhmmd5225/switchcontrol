@@ -119,6 +119,7 @@ fn run(
             peer_side: settings.side,
             swap_ctrl_cmd: settings.swap_ctrl_cmd,
             speed: settings.speed,
+            scroll_speed: settings.scroll_speed,
             edge_delay: settings.edge_delay,
         },
         Os::current(),
