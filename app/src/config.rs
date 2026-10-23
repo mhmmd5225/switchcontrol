@@ -18,6 +18,7 @@ usage: switchcontrol --side left|right [--listen ADDR | --connect ADDR] [options
   --connect ADDR      connect to the peer, e.g. 192.168.1.20 or 192.168.1.20:24800
   --name NAME         name shown to the peer (default: computer name)
   --speed F           pointer speed on the peer (default 1.0)
+  --scroll-speed F    scrolling speed on the peer (default 1.0)
   --no-swap           keep Ctrl and Cmd/Win as they are
   --edge-delay MS     push against the edge this long before crossing (default 0)
   --no-clipboard      do not share clipboard text with the other computer
@@ -47,6 +48,7 @@ pub struct Settings {
     pub net: NetMode,
     pub swap_ctrl_cmd: bool,
     pub speed: f64,
+    pub scroll_speed: f64,
     pub edge_delay: Duration,
     /// Share clipboard text when control passes between the computers.
     pub clipboard: bool,
@@ -69,6 +71,7 @@ pub struct FileConfig {
     pub listen: Option<String>,
     pub connect: Option<String>,
     pub speed: Option<f64>,
+    pub scroll_speed: Option<f64>,
     pub swap_ctrl_cmd: Option<bool>,
     pub edge_delay_ms: Option<u64>,
     pub clipboard: Option<bool>,
@@ -103,6 +106,11 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
             "--speed" => {
                 let raw = value()?;
                 cli.speed = Some(raw.parse().map_err(|_| format!("--speed: not a number: {raw}"))?);
+            }
+            "--scroll-speed" => {
+                let raw = value()?;
+                cli.scroll_speed =
+                    Some(raw.parse().map_err(|_| format!("--scroll-speed: not a number: {raw}"))?);
             }
             "--no-swap" => cli.swap_ctrl_cmd = Some(false),
             "--no-clipboard" => cli.clipboard = Some(false),
@@ -140,6 +148,7 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
         listen,
         connect,
         speed: cli.speed.or(file.speed),
+        scroll_speed: cli.scroll_speed.or(file.scroll_speed),
         swap_ctrl_cmd: cli.swap_ctrl_cmd.or(file.swap_ctrl_cmd),
         edge_delay_ms: cli.edge_delay_ms.or(file.edge_delay_ms),
         clipboard: cli.clipboard.or(file.clipboard),
@@ -168,6 +177,10 @@ pub fn resolve(config: FileConfig, flags: RunFlags) -> Result<Settings, String> 
     if !(speed > 0.0 && speed <= 10.0) {
         return Err(format!("speed must be in (0, 10], not {speed}"));
     }
+    let scroll_speed = config.scroll_speed.unwrap_or(1.0);
+    if !(scroll_speed > 0.0 && scroll_speed <= 10.0) {
+        return Err(format!("scroll speed must be in (0, 10], not {scroll_speed}"));
+    }
     let edge_delay_ms = config.edge_delay_ms.unwrap_or(0);
     if edge_delay_ms > 5000 {
         return Err(format!("edge delay must be at most 5000 ms, not {edge_delay_ms}"));
@@ -179,6 +192,7 @@ pub fn resolve(config: FileConfig, flags: RunFlags) -> Result<Settings, String> 
         net,
         swap_ctrl_cmd: config.swap_ctrl_cmd.unwrap_or(true),
         speed,
+        scroll_speed,
         edge_delay: Duration::from_millis(edge_delay_ms),
         clipboard: config.clipboard.unwrap_or(true),
         announce: config.announce.unwrap_or(true),
@@ -259,6 +273,7 @@ mod tests {
         assert_eq!(s.net, NetMode::Connect("192.168.1.20:24800".into()));
         assert!(!s.swap_ctrl_cmd);
         assert_eq!(s.speed, 1.5);
+        assert_eq!(parse("--side left --scroll-speed 0.5").unwrap().scroll_speed, 0.5);
     }
 
     #[test]
@@ -276,6 +291,7 @@ mod tests {
         assert!(parse("--side up").is_err());
         assert!(parse("--side left --listen :1 --connect x").is_err());
         assert!(parse("--side left --speed 0").is_err());
+        assert!(parse("--side left --scroll-speed 0").is_err());
         assert!(parse("--side left --edge-delay 9000").is_err());
         assert!(parse("--side left --edge-delay -1").is_err());
         assert!(parse("--side left --bogus").is_err());

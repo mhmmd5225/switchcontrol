@@ -17,6 +17,11 @@ use serde::{Deserialize, Serialize};
 pub const PROTOCOL_VERSION: u16 = 3;
 pub const DEFAULT_PORT: u16 = 24800;
 
+/// Wheel units per line of scrolling. A wheel notch is 120 units, which
+/// Windows scrolls by 3 lines by default; macOS reports and takes scrolling
+/// in lines, so one line there is one line on the other side.
+pub const WHEEL_PER_LINE: i32 = 40;
+
 /// Longest clipboard text shared, in bytes.
 pub const MAX_CLIPBOARD: usize = 1024 * 1024;
 /// Upper bound on a frame body; input messages are a few dozen bytes, a
@@ -91,8 +96,8 @@ pub enum InputEvent {
         button: MouseButton,
         down: bool,
     },
-    /// Wheel motion, 120 per notch. Positive `dy` scrolls away from the user,
-    /// positive `dx` scrolls right.
+    /// Wheel motion, 120 per notch ([`WHEEL_PER_LINE`] per line). Positive
+    /// `dy` scrolls away from the user, positive `dx` scrolls right.
     Wheel {
         dx: i32,
         dy: i32,
