@@ -29,6 +29,8 @@ use crate::tray::{Tray, TrayCommand};
 
 const SETTINGS_FILE: &str = "settings.toml";
 const LOG_LINES: usize = 500;
+/// The window does not resize: both pages are laid out to fit it.
+const WINDOW_SIZE: (f32, f32) = (460.0, 760.0);
 
 /// The emergency hotkey as this OS spells it.
 const HOTKEY: &str =
@@ -40,8 +42,9 @@ pub fn run(at_login: bool) -> Result<(), String> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("SwitchControl")
-            .with_inner_size([460.0, 680.0])
-            .with_min_inner_size([420.0, 520.0])
+            .with_inner_size([WINDOW_SIZE.0, WINDOW_SIZE.1])
+            .with_resizable(false)
+            .with_maximize_button(false)
             .with_icon(Arc::new(
                 eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icon-256.png"))
                     .expect("bundled icon is a valid PNG"),
@@ -701,21 +704,31 @@ impl GuiApp {
                 theme::divider(ui);
                 let clip = "Pano paylaşımı";
                 theme::row(ui, clip, |ui| theme::switch(ui, &mut form.clipboard, clip));
-                ui.label(
-                    RichText::new(
-                        "Kopyalanan metin, imleç diğer bilgisayara geçerken oraya da aktarılır.",
-                    )
-                    .small()
-                    .weak(),
-                );
             });
         });
     }
 
-    fn security_ui(&mut self, ui: &mut egui::Ui) {
+    fn app_ui(&mut self, ui: &mut egui::Ui) {
         let running = self.running.is_some();
-        theme::section(ui, "Güvenlik");
+        theme::section(ui, "Uygulama");
         theme::card(ui, |ui| {
+            let label = "Oturum açılınca başlat";
+            let mut on = self.autostart;
+            let (_, switch) = theme::row(ui, label, |ui| theme::switch(ui, &mut on, label));
+            if switch.changed() {
+                match autostart::set(on) {
+                    Ok(()) => self.autostart = on,
+                    Err(e) => self.error = Some(format!("Otomatik başlatma ayarlanamadı: {e}")),
+                }
+            }
+            if self.tray.is_some() {
+                ui.label(
+                    RichText::new("Pencereyi kapatınca simgeye iner; çıkış simgenin menüsünde.")
+                        .small()
+                        .weak(),
+                );
+            }
+            theme::divider(ui);
             let mut forget = false;
             theme::row(ui, &format!("Eşleşmiş bilgisayar: {}", self.paired.len()), |ui| {
                 let can_forget = !running && !self.paired.is_empty();
@@ -729,41 +742,11 @@ impl GuiApp {
                 }
                 self.paired = paired_list(&self.data_dir);
             }
-            ui.label(
-                RichText::new(
-                    "Bağlantı TLS 1.3 ile şifrelenir. Yeni bir bilgisayar ilk bağlantıda \
-                     PIN ile eşleştirilir.",
-                )
-                .small()
-                .weak(),
-            );
-        });
-    }
-
-    fn app_ui(&mut self, ui: &mut egui::Ui) {
-        theme::section(ui, "Uygulama");
-        theme::card(ui, |ui| {
-            let label = "Oturum açılınca başlat";
-            let mut on = self.autostart;
-            let (_, switch) = theme::row(ui, label, |ui| theme::switch(ui, &mut on, label));
-            if switch.changed() {
-                match autostart::set(on) {
-                    Ok(()) => self.autostart = on,
-                    Err(e) => self.error = Some(format!("Otomatik başlatma ayarlanamadı: {e}")),
-                }
-            }
-            let note = if self.tray.is_some() {
-                "Açılışta simge olarak başlar ve kayıtlı ayarlarla bağlanır. Pencereyi kapatınca \
-                 SwitchControl simgeye iner; çıkmak için simgenin menüsünden Çıkış'ı seçin."
-            } else {
-                "Açılışta kayıtlı ayarlarla başlar ve bağlanır."
-            };
-            ui.label(RichText::new(note).small().weak());
         });
     }
 
     fn log_ui(&self, ui: &mut egui::Ui) {
-        theme::section(ui, "Ayrıntılar");
+        ui.add_space(10.0);
         theme::card(ui, |ui| {
             egui::CollapsingHeader::new("Günlük").default_open(false).show(ui, |ui| {
                 egui::ScrollArea::vertical().max_height(180.0).stick_to_bottom(true).show(
@@ -822,29 +805,23 @@ impl eframe::App for GuiApp {
                 egui::Frame::new().fill(p.background).inner_margin(egui::Margin::symmetric(16, 14)),
             )
             .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    // Room for the scroll bar, so it does not cover the cards.
-                    egui::Frame::new()
-                        .inner_margin(egui::Margin { right: 10, ..Default::default() })
-                        .show(ui, |ui| {
-                            self.header_ui(ui);
-                            // Needed whichever page is open: a PIN question must not hide.
-                            if self.page == Page::Connection {
-                                self.status_ui(ui);
-                            }
-                            self.permissions_ui(ui);
-                            self.pairing_ui(ui);
-                            match self.page {
-                                Page::Connection => self.connection_ui(ui),
-                                Page::Settings => {
-                                    self.behavior_ui(ui);
-                                    self.security_ui(ui);
-                                    self.app_ui(ui);
-                                    self.log_ui(ui);
-                                }
-                            }
-                            ui.add_space(4.0);
-                        });
+                self.header_ui(ui);
+                // Needed whichever page is open: a PIN question must not hide.
+                if self.page == Page::Connection {
+                    self.status_ui(ui);
+                }
+                self.permissions_ui(ui);
+                self.pairing_ui(ui);
+                // Both pages fit; the bar shows only if a long list or the open log overflow.
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self
+                    .page
+                {
+                    Page::Connection => self.connection_ui(ui),
+                    Page::Settings => {
+                        self.behavior_ui(ui);
+                        self.app_ui(ui);
+                        self.log_ui(ui);
+                    }
                 });
             });
         self.edge_bar_ui(ui.ctx());
