@@ -40,7 +40,7 @@ pub fn run(at_login: bool) -> Result<(), String> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("SwitchControl")
-            .with_inner_size([460.0, 760.0])
+            .with_inner_size([460.0, 680.0])
             .with_min_inner_size([420.0, 520.0])
             .with_icon(Arc::new(
                 eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icon-256.png"))
@@ -73,6 +73,13 @@ pub fn run(at_login: bool) -> Result<(), String> {
 enum Mode {
     Listen,
     Connect,
+}
+
+/// The two screens: connecting, and everything else that can be changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Page {
+    Connection,
+    Settings,
 }
 
 /// The editable settings.
@@ -167,6 +174,7 @@ pub struct GuiApp {
     data_dir: PathBuf,
     dry_run: bool,
     form: Form,
+    page: Page,
     running: Option<Running>,
     generation: u64,
     reports_tx: Sender<(u64, Report)>,
@@ -201,6 +209,7 @@ impl GuiApp {
         GuiApp {
             ctx,
             form: Form::from_file(file),
+            page: Page::Connection,
             paired: paired_list(&data_dir),
             data_dir,
             dry_run,
@@ -450,14 +459,21 @@ impl GuiApp {
         }
     }
 
-    fn header_ui(&self, ui: &mut egui::Ui) {
+    fn header_ui(&mut self, ui: &mut egui::Ui) {
+        let dry_run = self.dry_run && self.running.is_some();
+        let page = &mut self.page;
         ui.horizontal(|ui| {
             ui.label(theme::semibold("SwitchControl").size(20.0));
-            if self.dry_run && self.running.is_some() {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new("Deneme modu: girdi yakalanmıyor").small().weak());
-                });
-            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                theme::segmented(
+                    ui,
+                    page,
+                    &[(Page::Connection, "Bağlantı"), (Page::Settings, "Ayarlar")],
+                );
+                if dry_run {
+                    ui.label(RichText::new("Deneme modu").small().weak());
+                }
+            });
         });
         ui.add_space(4.0);
     }
@@ -582,13 +598,14 @@ impl GuiApp {
         }
     }
 
-    fn settings_ui(&mut self, ui: &mut egui::Ui) {
+    /// Who connects to whom: everything needed to press Başlat.
+    fn connection_ui(&mut self, ui: &mut egui::Ui) {
         let enabled = self.running.is_none();
         let local_ip = self.local_ip;
         let paired = &self.paired;
         let form = &mut self.form;
         ui.add_enabled_ui(enabled, |ui| {
-            theme::section(ui, "Bağlantı");
+            ui.add_space(8.0);
             theme::card(ui, |ui| {
                 theme::row(ui, "Rol", |ui| {
                     theme::segmented(
@@ -648,7 +665,13 @@ impl GuiApp {
                 });
                 edit.labelled_by(label.id);
             });
+        });
+    }
 
+    fn behavior_ui(&mut self, ui: &mut egui::Ui) {
+        let enabled = self.running.is_none();
+        let form = &mut self.form;
+        ui.add_enabled_ui(enabled, |ui| {
             theme::section(ui, "Davranış");
             theme::card(ui, |ui| {
                 let (label, slider) = theme::row(ui, "İmleç hızı", |ui| {
@@ -805,13 +828,21 @@ impl eframe::App for GuiApp {
                         .inner_margin(egui::Margin { right: 10, ..Default::default() })
                         .show(ui, |ui| {
                             self.header_ui(ui);
-                            self.status_ui(ui);
+                            // Needed whichever page is open: a PIN question must not hide.
+                            if self.page == Page::Connection {
+                                self.status_ui(ui);
+                            }
                             self.permissions_ui(ui);
                             self.pairing_ui(ui);
-                            self.settings_ui(ui);
-                            self.security_ui(ui);
-                            self.app_ui(ui);
-                            self.log_ui(ui);
+                            match self.page {
+                                Page::Connection => self.connection_ui(ui),
+                                Page::Settings => {
+                                    self.behavior_ui(ui);
+                                    self.security_ui(ui);
+                                    self.app_ui(ui);
+                                    self.log_ui(ui);
+                                }
+                            }
                             ui.add_space(4.0);
                         });
                 });
@@ -957,6 +988,26 @@ mod tests {
             Some(LinkState::Connected { peer, .. }) => Some(peer),
             _ => None,
         }
+    }
+
+    /// Connecting fits on one screen; the rest of the settings is a click away.
+    #[test]
+    fn settings_are_on_their_own_page() {
+        let dir = temp_dir("pages");
+        let mut harness = harness(&dir);
+        harness.step();
+        harness.get_by_label("Başlat");
+        assert!(harness.query_by_label("İmleç hızı").is_none());
+
+        harness.get_by_label("Ayarlar").click();
+        harness.run_steps(2);
+        harness.get_by_label("İmleç hızı");
+        assert!(harness.query_by_label("Diğer bilgisayar").is_none());
+
+        harness.get_by_label("Bağlantı").click();
+        harness.run_steps(2);
+        harness.get_by_label("Diğer bilgisayar");
+        assert!(harness.query_by_label("İmleç hızı").is_none());
     }
 
     #[test]
