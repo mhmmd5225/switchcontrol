@@ -83,6 +83,8 @@ pub struct FileConfig {
     pub edge_bar: Option<bool>,
     /// The other computer's network card, for waking it (window only).
     pub wake_mac: Option<String>,
+    /// Wake the other computer whenever sharing starts, e.g. at login (window only).
+    pub wake_on_start: Option<bool>,
     pub data_dir: Option<PathBuf>,
 }
 
@@ -160,6 +162,7 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
         announce: cli.announce.or(file.announce),
         edge_bar: file.edge_bar,
         wake_mac: file.wake_mac,
+        wake_on_start: file.wake_on_start,
         data_dir: cli.data_dir.or(file.data_dir),
     };
     resolve(merged, flags)

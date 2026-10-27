@@ -33,9 +33,13 @@ use crate::wake;
 const SETTINGS_FILE: &str = "settings.toml";
 const LOG_LINES: usize = 500;
 /// The window does not resize: both pages are laid out to fit it.
-const WINDOW_SIZE: (f32, f32) = (460.0, 880.0);
+const WINDOW_SIZE: (f32, f32) = (460.0, 920.0);
 /// How long "packet sent" stays under the status after waking the other computer.
 const WAKE_NOTE: Duration = Duration::from_secs(6);
+/// Waking at start is repeated this often, a few times, until connected:
+/// right after login the network may not be up yet.
+const WAKE_RETRY: Duration = Duration::from_secs(10);
+const WAKE_TRIES: u32 = 4;
 
 /// The emergency hotkey as this OS spells it.
 const HOTKEY: &str =
@@ -106,6 +110,8 @@ struct Form {
     announce: bool,
     /// The other computer's network card, learned on connecting or typed in.
     wake_mac: String,
+    /// Wake the other computer whenever sharing starts.
+    wake_on_start: bool,
     /// Kept from the file; the window has no field for it.
     listen: Option<String>,
 }
@@ -132,6 +138,7 @@ impl Form {
             clipboard: file.clipboard.unwrap_or(true),
             announce: file.announce.unwrap_or(true),
             wake_mac: file.wake_mac.unwrap_or_default(),
+            wake_on_start: file.wake_on_start.unwrap_or(false),
             listen: file.listen,
         }
     }
@@ -151,6 +158,7 @@ impl Form {
             clipboard: Some(self.clipboard),
             announce: Some(self.announce),
             wake_mac: Some(self.wake_mac.trim().to_string()).filter(|m| !m.is_empty()),
+            wake_on_start: Some(self.wake_on_start),
             data_dir: None,
         }
     }
@@ -218,6 +226,8 @@ pub struct GuiApp {
     confirm_shutdown: bool,
     /// When the last Wake-on-LAN packet went out.
     woken_at: Option<Instant>,
+    /// Waking at start: when to send again, and how many more times.
+    wake_retry: Option<(Instant, u32)>,
 }
 
 impl GuiApp {
@@ -250,6 +260,7 @@ impl GuiApp {
             autostart: autostart::is_enabled(),
             confirm_shutdown: false,
             woken_at: None,
+            wake_retry: None,
         }
     }
 
@@ -380,6 +391,33 @@ impl GuiApp {
             engine: Some(Engine::start(settings, pin, report)),
             pin_tx: Some(pin_tx),
         });
+        if self.form.wake_on_start && self.wake_mac().is_some() {
+            self.wake_retry = Some((Instant::now(), WAKE_TRIES));
+            self.wake_at_start();
+        }
+    }
+
+    /// Wakes the other computer while sharing has started but is not
+    /// connected yet, a few times over.
+    fn wake_at_start(&mut self) {
+        let Some((at, left)) = self.wake_retry else { return };
+        if self.running.is_none() || self.peer_os().is_some() || left == 0 {
+            self.wake_retry = None;
+            return;
+        }
+        if Instant::now() < at {
+            return;
+        }
+        let Some(mac) = self.wake_mac() else { return };
+        match wake::send(mac) {
+            Ok(()) => {
+                self.push_log(format!("Wake-on-LAN packet sent to {}", wake::format_mac(mac)))
+            }
+            // Likely no network yet; the next try may find one.
+            Err(e) => self.push_log(format!("could not send the Wake-on-LAN packet: {e}")),
+        }
+        self.wake_retry = Some((Instant::now() + WAKE_RETRY, left - 1));
+        self.ctx.request_repaint_after(WAKE_RETRY);
     }
 
     fn stop(&mut self) {
@@ -391,6 +429,7 @@ impl GuiApp {
         self.view.show_pin = None;
         self.view.ask_pin = None;
         self.confirm_shutdown = false;
+        self.wake_retry = None;
         self.paired = paired_list(&self.data_dir);
     }
 
@@ -970,6 +1009,13 @@ impl GuiApp {
             RichText::new("Adres AA:BB:CC:DD:EE:FF biçiminde olmalı.").small().color(p.red)
         };
         ui.label(note);
+        let label = "Başlayınca diğer bilgisayarı uyandır";
+        let mut on = self.form.wake_on_start;
+        let (_, switch) = theme::row(ui, label, |ui| theme::switch(ui, &mut on, label));
+        if switch.changed() {
+            self.form.wake_on_start = on;
+            self.save_settings();
+        }
     }
 
     fn log_ui(&self, ui: &mut egui::Ui) {
@@ -1011,6 +1057,7 @@ impl eframe::App for GuiApp {
     /// Also runs while the window is hidden in the tray.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll();
+        self.wake_at_start();
         self.tray_logic(ctx);
     }
 
@@ -1296,6 +1343,33 @@ mod tests {
 
         connected(&mut harness, Os::Windows);
         assert!(harness.query_by_label("Diğer bilgisayarı uyandır").is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// With the switch on, starting wakes the other computer, again a few
+    /// times until it connects; stopping ends it.
+    #[test]
+    fn starting_wakes_the_other_computer() {
+        let dir = temp_dir("wake-start");
+        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let mut harness = harness(&dir);
+        let form = &mut harness.state_mut().form;
+        form.mode = Mode::Connect;
+        form.address = format!("127.0.0.1:{port}");
+        form.wake_mac = "3C:22:FB:0A:B1:07".into();
+        form.wake_on_start = true;
+        harness.step();
+        harness.get_by_label("Başlat").click();
+        harness.run_steps(2);
+        let woken = |app: &GuiApp| app.view.log.iter().any(|l| l.contains("Wake-on-LAN packet"));
+        assert!(woken(harness.state()));
+        assert_eq!(harness.state().wake_retry.map(|(_, left)| left), Some(WAKE_TRIES - 1));
+
+        harness.get_by_label("Durdur").click();
+        harness.run_steps(2);
+        assert!(harness.state().wake_retry.is_none());
+        let saved = config::load(&dir.join(SETTINGS_FILE)).unwrap();
+        assert_eq!(saved.wake_on_start, Some(true));
         let _ = std::fs::remove_dir_all(dir);
     }
 

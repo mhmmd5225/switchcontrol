@@ -113,6 +113,7 @@ Hazırlık (bir kez):
 | 7.6 | M'de **Diğer bilgisayarı uyandır**. | W açılır (BIOS ayarı açıksa), oturum açınca SwitchControl başlar ve bağlanır. |
 | 7.7 | W'de **Kapat**'a basın (hedef M). | Soruda turuncu uyarı: kapalı Mac ağdan uyandırılamaz. **Vazgeç** deyin. |
 | 7.8 | Simgenin menüsüne bakın, bağlıyken ve değilken. | Bağlıyken "Diğer bilgisayarı uyut/kapat…", değilken "…uyandır" seçilebilir. |
+| 7.9 | M'yi uyutun. W'de **Ayarlar > Başlayınca diğer bilgisayarı uyandır**'ı açın (**Oturum açılınca başlat** da açık), sonra W'yi yeniden başlatıp oturum açın. | W'de SwitchControl başlayınca M uyanır ve iki taraf bağlanır. W Günlük'ünde `Wake-on-LAN packet sent …` satırları (bağlanana kadar en çok 4). |
 
 ## 8. Gönderilecekler
 

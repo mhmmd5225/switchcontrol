@@ -40,6 +40,8 @@ Bağlanınca her iki taraf diğerine bağlantıda kullandığı ağ kartının M
 - **Windows (uykudan):** Aygıt Yöneticisi > ağ kartı > *Güç Yönetimi*'nde *Bu aygıtın bilgisayarı uyandırmasına izin ver* ve *Yalnızca sihirli paket…* açık; *Gelişmiş*'te *Wake on Magic Packet* etkin olmalı.
 - **Windows (kapalıyken):** ayrıca Denetim Masası > Güç Seçenekleri'nde *Hızlı başlatmayı aç* kapalı ve BIOS/UEFI'de *Wake on LAN* (ya da *Power On by PCI-E*) açık olmalı.
 
+*Ayarlar > Uygulama > Başlayınca diğer bilgisayarı uyandır* açıksa SwitchControl her başladığında (oturum açılınca kendiliğinden başladığında da) diğer bilgisayara uyandırma paketi gönderir; bağlanana kadar 10 saniye arayla toplam 4 kez dener. Örneğin Windows'ta açılınca uyuyan Mac'i uyandırmak için Windows tarafında açın.
+
 Kablolu bağlantı önerilir; Wi-Fi üzerinden uyandırma çoğu zaman çalışmaz. Bu özellik için iki bilgisayarda da aynı sürüm gerekir (protokol 4).
 
 ### Mac uygulaması
