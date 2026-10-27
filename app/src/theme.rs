@@ -148,6 +148,8 @@ fn apply(style: &mut egui::Style, p: &Palette) {
     v.selection.bg_fill = p.accent;
     v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
     v.slider_trailing_fill = true;
+    // The only dimming of a disabled control; widgets do not dim themselves on top.
+    v.disabled_alpha = 0.6;
     v.collapsing_header_frame = false;
     v.indent_has_left_vline = false;
 
@@ -206,7 +208,12 @@ fn with_alpha(c: Color32, alpha: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(r, g, b, (alpha.clamp(0.0, 1.0) * 255.0) as u8)
 }
 
-/// A rounded rectangle filled with a left-to-right gradient, in thin slices.
+/// A rounded rectangle filled with a left-to-right gradient.
+///
+/// One mesh: the rounded rectangle is tessellated once (with its smooth,
+/// anti-aliased edge) and each vertex coloured by where it sits. Painting it
+/// in overlapping slices instead shows stripes as soon as the colours are
+/// translucent, e.g. in a disabled part of the window.
 fn gradient_rect(
     painter: &egui::Painter,
     rect: Rect,
@@ -214,21 +221,23 @@ fn gradient_rect(
     a: Color32,
     b: Color32,
 ) {
-    const SLICES: usize = 24;
-    let w = rect.width() / SLICES as f32;
-    for i in 0..SLICES {
-        let t = (i as f32 + 0.5) / SLICES as f32;
-        let x0 = rect.left() + w * i as f32;
-        let slice = Rect::from_min_max(
-            Pos2::new(x0, rect.top()),
-            Pos2::new((x0 + w + 1.0).min(rect.right()), rect.bottom()),
-        );
-        painter.with_clip_rect(slice.intersect(painter.clip_rect())).rect_filled(
-            rect,
-            radius,
-            mix(a, b, t),
-        );
+    if !rect.is_positive() {
+        return;
     }
+    let ctx = painter.ctx();
+    let options = ctx.tessellation_options(|o| *o);
+    let mut tessellator =
+        egui::epaint::Tessellator::new(ctx.pixels_per_point(), options, [1, 1], Vec::new());
+    let mut mesh = egui::Mesh::default();
+    tessellator
+        .tessellate_rect(&egui::epaint::RectShape::filled(rect, radius, Color32::WHITE), &mut mesh);
+    for vertex in &mut mesh.vertices {
+        let t = ((vertex.pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+        // Edge vertices fade out: keep their coverage.
+        let coverage = f32::from(vertex.color.a()) / 255.0;
+        vertex.color = mix(a, b, t).gamma_multiply(coverage);
+    }
+    painter.add(Shape::mesh(mesh));
 }
 
 /// A soft light that fades to nothing at `radius`.
@@ -400,7 +409,6 @@ fn draw_button(
     let hover = anim(ui, response.id.with("hover"), enabled && response.hovered());
     let press =
         anim(ui, response.id.with("press"), enabled && response.is_pointer_button_down_on());
-    let dim = if enabled { 1.0 } else { 0.4 };
     let radius = CornerRadius::same(radius);
     let painter = ui.painter().clone();
     // Brighter on hover, darker while pressed.
@@ -415,26 +423,20 @@ fn draw_button(
                 (mix(p.red, Color32::BLACK, 0.25), mix(p.red, Color32::BLACK, 0.45))
             };
             if hover > 0.0 {
-                halo(&painter, rect, 12, with_alpha(a, 0.38 * hover * dim));
+                halo(&painter, rect, 12, with_alpha(a, 0.38 * hover));
             }
-            gradient_rect(
-                &painter,
-                rect,
-                radius,
-                shade(a).gamma_multiply(dim),
-                shade(b).gamma_multiply(dim),
-            );
-            (Color32::WHITE.gamma_multiply(dim), Color32::from_white_alpha((40.0 * dim) as u8))
+            gradient_rect(&painter, rect, radius, shade(a), shade(b));
+            (Color32::WHITE, Color32::from_white_alpha(40))
         }
         Kind::Secondary => {
             let fill = mix(p.field, p.field_hover, hover);
             painter.rect_filled(rect, radius, mix(fill, Color32::BLACK, 0.15 * press));
-            (p.text.gamma_multiply(dim), mix(p.border, p.shine, hover))
+            (p.text, mix(p.border, p.shine, hover))
         }
         Kind::Ghost => {
             let fill = with_alpha(Color32::WHITE, 0.10 * hover + 0.05 * press);
             painter.rect_filled(rect, radius, fill);
-            (mix(p.muted, p.text, hover).gamma_multiply(dim), Color32::TRANSPARENT)
+            (mix(p.muted, p.text, hover), Color32::TRANSPARENT)
         }
     };
     painter.rect_stroke(rect, radius, Stroke::new(1.0, edge), StrokeKind::Inside);
@@ -499,7 +501,6 @@ pub fn segmented<T: PartialEq + Copy>(
         }
         let hover = anim(ui, item.id.with("hover"), enabled && item.hovered());
         let color = if selected { Color32::WHITE } else { mix(p.muted, p.text, hover) };
-        let color = if enabled { color } else { color.gamma_multiply(0.5) };
         let galley = text_galley(ui, semibold(label).size(13.0).color(color));
         painter.galley(rects[i].center() - galley.size() / 2.0, galley, color);
         if item.clicked() && !selected {
@@ -582,22 +583,15 @@ pub fn switch(ui: &mut egui::Ui, on: &mut bool, label: &str) -> Response {
     if ui.is_rect_visible(rect) {
         let t = ui.ctx().animate_bool_responsive(response.id, *on);
         let hover = anim(ui, response.id.with("hover"), enabled && response.hovered());
-        let dim = if enabled { 1.0 } else { 0.45 };
         let painter = ui.painter().clone();
         let radius = CornerRadius::same(12);
         let off = mix(p.field_hover, Color32::WHITE, 0.06 * hover);
-        painter.rect_filled(rect, radius, off.gamma_multiply(dim));
+        painter.rect_filled(rect, radius, off);
         if t > 0.0 {
             // The gradient track fades in as the knob moves over.
             let on_a = mix(off, p.accent, t);
             let on_b = mix(off, p.accent_end, t);
-            gradient_rect(
-                &painter,
-                rect,
-                radius,
-                on_a.gamma_multiply(dim),
-                on_b.gamma_multiply(dim),
-            );
+            gradient_rect(&painter, rect, radius, on_a, on_b);
         }
         let x = egui::lerp((rect.left() + 12.0)..=(rect.right() - 12.0), t);
         let center = Pos2::new(x, rect.center().y);
@@ -608,7 +602,7 @@ pub fn switch(ui: &mut egui::Ui, on: &mut bool, label: &str) -> Response {
                 Color32::from_white_alpha((40.0 * hover) as u8),
             );
         }
-        painter.circle_filled(center, 9.5, Color32::WHITE.gamma_multiply(dim));
+        painter.circle_filled(center, 9.5, Color32::WHITE);
     }
     response
 }

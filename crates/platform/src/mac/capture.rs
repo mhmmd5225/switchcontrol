@@ -295,9 +295,11 @@ unsafe fn translate(
             // Fixed-point (16.16) line deltas also cover fractional trackpad scrolls.
             // Axis 1 is vertical (positive = away from the user). Axis 2 is
             // horizontal with positive = left, the opposite of the wire format.
+            // One line here is one line on the peer.
+            let per_line = i64::from(sc_proto::WHEEL_PER_LINE);
             let (mut rest_y, mut rest_x) = state.scroll_rest.get();
-            rest_y += field(kCGScrollWheelEventFixedPtDeltaAxis1) * 120;
-            rest_x -= field(kCGScrollWheelEventFixedPtDeltaAxis2) * 120;
+            rest_y += field(kCGScrollWheelEventFixedPtDeltaAxis1) * per_line;
+            rest_x -= field(kCGScrollWheelEventFixedPtDeltaAxis2) * per_line;
             let (dy, dx) = (rest_y / 65536, rest_x / 65536);
             state.scroll_rest.set((rest_y - dy * 65536, rest_x - dx * 65536));
             if dx != 0 || dy != 0 {

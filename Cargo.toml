@@ -3,7 +3,7 @@ resolver = "3"
 members = ["app", "crates/core", "crates/keymap", "crates/platform", "crates/proto", "spikes/win-spike"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 publish = false
 

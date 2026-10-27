@@ -11,7 +11,20 @@
 pub enum TrayCommand {
     Show,
     StartStop,
+    /// Put the other computer to sleep, shut it down, or wake it.
+    Sleep,
+    Shutdown,
+    Wake,
     Quit,
+}
+
+/// Which of the other computer's power entries can be picked right now.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+pub struct PowerMenu {
+    pub sleep: bool,
+    pub shutdown: bool,
+    pub wake: bool,
 }
 
 #[cfg(any(windows, target_os = "macos"))]
@@ -24,14 +37,15 @@ mod imp {
         Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
     };
 
-    use super::TrayCommand;
+    use super::{PowerMenu, TrayCommand};
 
     pub struct Tray {
         icon: TrayIcon,
         status: MenuItem,
         start_stop: MenuItem,
+        power: [MenuItem; 3],
         commands: Receiver<TrayCommand>,
-        shown: Option<(String, bool)>,
+        shown: Option<(String, bool, PowerMenu)>,
     }
 
     impl Tray {
@@ -40,6 +54,11 @@ mod imp {
             let status = MenuItem::new("SwitchControl", false, None);
             let start_stop = MenuItem::new("Başlat", true, None);
             let show = MenuItem::new("Pencereyi göster", true, None);
+            let power = [
+                MenuItem::new("Diğer bilgisayarı uyut", false, None),
+                MenuItem::new("Diğer bilgisayarı kapat…", false, None),
+                MenuItem::new("Diğer bilgisayarı uyandır", false, None),
+            ];
             let quit = MenuItem::new("Çıkış", true, None);
             let menu = Menu::new();
             menu.append_items(&[
@@ -47,6 +66,10 @@ mod imp {
                 &PredefinedMenuItem::separator(),
                 &start_stop,
                 &show,
+                &PredefinedMenuItem::separator(),
+                &power[0],
+                &power[1],
+                &power[2],
                 &PredefinedMenuItem::separator(),
                 &quit,
             ])
@@ -66,16 +89,17 @@ mod imp {
                 .map_err(|e| e.to_string())?;
 
             let (tx, commands) = mpsc::channel();
-            let ids = (start_stop.id().clone(), show.id().clone(), quit.id().clone());
+            let ids = [
+                (start_stop.id().clone(), TrayCommand::StartStop),
+                (show.id().clone(), TrayCommand::Show),
+                (power[0].id().clone(), TrayCommand::Sleep),
+                (power[1].id().clone(), TrayCommand::Shutdown),
+                (power[2].id().clone(), TrayCommand::Wake),
+                (quit.id().clone(), TrayCommand::Quit),
+            ];
             let (menu_tx, menu_ctx) = (tx.clone(), ctx.clone());
             MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-                let command = if event.id == ids.0 {
-                    TrayCommand::StartStop
-                } else if event.id == ids.1 {
-                    TrayCommand::Show
-                } else if event.id == ids.2 {
-                    TrayCommand::Quit
-                } else {
+                let Some(&(_, command)) = ids.iter().find(|(id, _)| *id == event.id) else {
                     return;
                 };
                 let _ = menu_tx.send(command);
@@ -99,21 +123,24 @@ mod imp {
                 }
             }));
 
-            Ok(Tray { icon, status, start_stop, commands, shown: None })
+            Ok(Tray { icon, status, start_stop, power, commands, shown: None })
         }
 
         pub fn commands(&self) -> Vec<TrayCommand> {
             self.commands.try_iter().collect()
         }
 
-        /// Shows the status line and the right start/stop entry.
-        pub fn update(&mut self, status: &str, running: bool) {
-            let wanted = (status.to_string(), running);
+        /// Shows the status line and the entries that can be picked now.
+        pub fn update(&mut self, status: &str, running: bool, power: PowerMenu) {
+            let wanted = (status.to_string(), running, power);
             if self.shown.as_ref() == Some(&wanted) {
                 return;
             }
             self.status.set_text(status);
             self.start_stop.set_text(if running { "Durdur" } else { "Başlat" });
+            for (item, on) in self.power.iter().zip([power.sleep, power.shutdown, power.wake]) {
+                item.set_enabled(on);
+            }
             let _ = self.icon.set_tooltip(Some(format!("SwitchControl: {status}")));
             self.shown = Some(wanted);
         }
@@ -124,7 +151,7 @@ mod imp {
 mod imp {
     use eframe::egui;
 
-    use super::TrayCommand;
+    use super::{PowerMenu, TrayCommand};
 
     /// No tray on other systems (it would need GTK).
     pub struct Tray;
@@ -138,7 +165,7 @@ mod imp {
             Vec::new()
         }
 
-        pub fn update(&mut self, _status: &str, _running: bool) {}
+        pub fn update(&mut self, _status: &str, _running: bool, _power: PowerMenu) {}
     }
 }
 

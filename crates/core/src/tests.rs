@@ -8,7 +8,13 @@ const PC_SCREEN: Rect = Rect { left: 0, top: 0, right: 2560, bottom: 1440 };
 const MAC_SCREEN: Rect = Rect { left: 0, top: 0, right: 1512, bottom: 982 };
 
 fn config(peer_side: Side) -> Config {
-    Config { peer_side, swap_ctrl_cmd: true, speed: 1.0, edge_delay: Duration::ZERO }
+    Config {
+        peer_side,
+        swap_ctrl_cmd: true,
+        speed: 1.0,
+        scroll_speed: 1.0,
+        edge_delay: Duration::ZERO,
+    }
 }
 
 /// A Windows PC with the Mac to its right, already connected.
@@ -338,6 +344,18 @@ fn receiver_releases_held_keys_on_leave_and_disconnect() {
 }
 
 #[test]
+fn power_request_releases_held_keys_first() {
+    let mut mac = mac();
+    mac.peer_message(Message::Enter { x: 0, y: 0 });
+    mac.peer_message(Message::Key { usage: 0x04, down: true });
+    let actions = mac.peer_message(Message::Power(Power::Sleep));
+    assert_eq!(injected(&actions), vec![key(0x04, false)]);
+    assert_eq!(actions.last(), Some(&Action::Power(Power::Sleep)));
+    // No longer controlled: later input from the peer is not injected.
+    assert!(mac.peer_message(Message::MouseMove { x: 5, y: 5 }).is_empty());
+}
+
+#[test]
 fn unmatched_key_up_is_not_injected() {
     let mut mac = mac();
     mac.peer_message(Message::Enter { x: 0, y: 0 });
@@ -430,4 +448,19 @@ fn received_clipboard_is_set_at_any_time() {
     let text = "kopyalanan metin".to_string();
     let actions = mac.peer_message(Message::Clipboard { text: text.clone() });
     assert_eq!(actions, vec![Action::SetClipboard(text)]);
+}
+
+#[test]
+fn scroll_speed_scales_the_wheel_and_keeps_fractions() {
+    let mut pc = pc();
+    pc.config.scroll_speed = 0.5;
+    pc.local_input(moved(2559, 720));
+    let wheel = |pc: &mut Node, dy| sent(&pc.local_input(InputEvent::Wheel { dx: 0, dy }));
+    assert_eq!(wheel(&mut pc, 120), vec![Message::Wheel { dx: 0, dy: 60 }]);
+    // Small high-resolution steps add up instead of being lost.
+    assert!(wheel(&mut pc, 1).is_empty());
+    assert_eq!(wheel(&mut pc, 1), vec![Message::Wheel { dx: 0, dy: 1 }]);
+
+    pc.config.scroll_speed = 2.0;
+    assert_eq!(wheel(&mut pc, -120), vec![Message::Wheel { dx: 0, dy: -240 }]);
 }

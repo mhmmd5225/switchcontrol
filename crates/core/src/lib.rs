@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use sc_keymap::swap_ctrl_gui;
-use sc_proto::{Hello, InputEvent, Message, MouseButton, Os, PROTOCOL_VERSION, Rect};
+use sc_proto::{Hello, InputEvent, Message, MouseButton, Os, PROTOCOL_VERSION, Power, Rect};
 
 pub use layout::Side;
 use layout::{clamp_to_screens, map_span, on_edge};
@@ -28,6 +28,8 @@ pub struct Config {
     pub swap_ctrl_cmd: bool,
     /// Multiplier for motion sent to the peer.
     pub speed: f64,
+    /// Multiplier for scrolling sent to the peer.
+    pub scroll_speed: f64,
     /// How long the cursor must keep pushing against the edge before control
     /// passes to the peer; zero crosses on touch.
     pub edge_delay: Duration,
@@ -67,6 +69,8 @@ pub enum Action {
     ShareClipboard,
     /// The peer shared its clipboard text: put it on this machine's clipboard.
     SetClipboard(String),
+    /// The peer asked this computer to sleep or shut down.
+    Power(Power),
     Log(String),
 }
 
@@ -100,6 +104,8 @@ pub struct Node {
     edge_since: Option<Instant>,
     /// The edge bar as last reported.
     edge_hint: Option<EdgeHint>,
+    /// Scaled wheel motion below one unit, carried over.
+    wheel_rest: (f64, f64),
     /// Buttons we pressed on the peer and have not released yet.
     forwarded_buttons: BTreeSet<MouseButton>,
     /// Whether the peer is currently driving this machine.
@@ -123,6 +129,7 @@ impl Node {
             local_buttons: BTreeSet::new(),
             edge_since: None,
             edge_hint: None,
+            wheel_rest: (0.0, 0.0),
             forwarded_buttons: BTreeSet::new(),
             controlled: false,
             injected_keys: BTreeSet::new(),
@@ -137,6 +144,7 @@ impl Node {
             name: self.name.clone(),
             os: self.os,
             screens: self.screens.clone(),
+            mac: None,
         }
     }
 
@@ -203,7 +211,12 @@ impl Node {
                     set(&mut self.forwarded_buttons, button, down);
                     out.push(Action::Send(Message::Button { button, down }));
                 }
-                InputEvent::Wheel { dx, dy } => out.push(Action::Send(Message::Wheel { dx, dy })),
+                InputEvent::Wheel { dx, dy } => {
+                    let (dx, dy) = self.scale_wheel(dx, dy);
+                    if dx != 0 || dy != 0 {
+                        out.push(Action::Send(Message::Wheel { dx, dy }));
+                    }
+                }
                 InputEvent::Key { usage, down } => {
                     out.push(Action::Send(Message::Key { usage, down }))
                 }
@@ -237,6 +250,12 @@ impl Node {
             }
             Message::ReleaseAll => self.release_injected(&mut out),
             Message::Clipboard { text } => out.push(Action::SetClipboard(text)),
+            Message::Power(power) => {
+                // Nothing may stay held down across the sleep.
+                self.release_injected(&mut out);
+                self.controlled = false;
+                out.push(Action::Power(power));
+            }
             _ if !self.controlled => {}
             Message::MouseMove { x, y } => out.push(Action::Inject(InputEvent::MouseMove { x, y })),
             Message::Button { button, down } => {
@@ -382,6 +401,16 @@ impl Node {
 
     /// Returns control to this machine. With `peer_y`, the local cursor is
     /// placed at the matching height just inside our edge facing the peer.
+    /// Applies the scroll speed, keeping fractions for the next notch.
+    fn scale_wheel(&mut self, dx: i32, dy: i32) -> (i32, i32) {
+        let speed = self.config.scroll_speed;
+        let x = self.wheel_rest.0 + dx as f64 * speed;
+        let y = self.wheel_rest.1 + dy as f64 * speed;
+        let (sx, sy) = (x.trunc(), y.trunc());
+        self.wheel_rest = (x - sx, y - sy);
+        (sx as i32, sy as i32)
+    }
+
     fn leave_remote(&mut self, out: &mut Vec<Action>, notify: bool, peer_y: Option<i32>) {
         self.mode = Mode::Local;
         self.forwarded_buttons.clear();
