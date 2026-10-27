@@ -3221,7 +3221,7 @@ dependencies = [
 
 [[package]]
 name = "sc-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "sc-keymap",
  "sc-proto",
@@ -3229,11 +3229,11 @@ dependencies = [
 
 [[package]]
 name = "sc-keymap"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "sc-platform"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "sc-keymap",
  "sc-proto",
@@ -3242,7 +3242,7 @@ dependencies = [
 
 [[package]]
 name = "sc-proto"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "postcard",
  "serde",
@@ -3564,7 +3564,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "switchcontrol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arboard",
  "eframe",
@@ -4532,7 +4532,7 @@ dependencies = [
 
 [[package]]
 name = "win-spike"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "sc-platform",
  "sc-proto",
