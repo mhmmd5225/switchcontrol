@@ -30,6 +30,18 @@ Windows'ta bildirim alanında, Mac'te menü çubuğunda bir SwitchControl simges
 
 *Ayarlar > Uygulama > Oturum açılınca başlat* açıksa SwitchControl oturum açılınca simge olarak başlar ve kayıtlı ayarlarla bağlanır. Windows'ta kullanıcının başlangıç kaydına (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`), Mac'te `~/Library/LaunchAgents/com.switchcontrol.app.plist` dosyasına yazılır. Uygulamayı başka bir klasöre taşırsanız anahtarı kapatıp yeniden açın.
 
+### Uyutma, kapatma, uyandırma
+
+Bağlıyken *Bağlantı* sayfasındaki durum kartında diğer bilgisayar için düğmeler çıkar: Mac için *Uyut* ve *Kapat*, Windows için *Kapat* (kapatmadan önce sorulur). Mac `pmset sleepnow` ile uyur, `System Events` ile kapanır (macOS ilk seferde bu izni sorar); Windows `shutdown /s /t 0` ile kapanır. Kaydedilmemiş işi olan uygulamalar kapanmayı durdurabilir.
+
+Bağlanınca her iki taraf diğerine bağlantıda kullandığı ağ kartının MAC adresini bildirir; adres *Ayarlar > Uygulama > Uyandırma adresi* alanına yazılır (elle de girilebilir). Bağlı değilken durum kartındaki *Diğer bilgisayarı uyandır* düğmesi yerel ağa Wake-on-LAN paketi gönderir; aynı komutlar simgenin menüsünde de vardır. Uyandırmanın çalışması için:
+
+- **Mac mini:** Sistem Ayarları > Enerji > *Ağ erişimi için uyandır* açık olmalı. Mac yalnızca uykudan uyanır; kapatılmış bir Mac ağdan açılamaz.
+- **Windows (uykudan):** Aygıt Yöneticisi > ağ kartı > *Güç Yönetimi*'nde *Bu aygıtın bilgisayarı uyandırmasına izin ver* ve *Yalnızca sihirli paket…* açık; *Gelişmiş*'te *Wake on Magic Packet* etkin olmalı.
+- **Windows (kapalıyken):** ayrıca Denetim Masası > Güç Seçenekleri'nde *Hızlı başlatmayı aç* kapalı ve BIOS/UEFI'de *Wake on LAN* (ya da *Power On by PCI-E*) açık olmalı.
+
+Kablolu bağlantı önerilir; Wi-Fi üzerinden uyandırma çoğu zaman çalışmaz. Bu özellik için iki bilgisayarda da aynı sürüm gerekir (protokol 4).
+
 ### Mac uygulaması
 
 Mac'te depo klasöründe:
@@ -71,6 +83,7 @@ switchcontrol --side left --connect 192.168.1.20
 | `--scroll-speed F` | Karşı ekrandaki kaydırma hızı çarpanı (varsayılan 1.0); penceredeki karşılığı *Ayarlar > Kaydırma hızı* |
 | `--no-swap` | Ctrl ↔ Cmd/Win değişimini kapat |
 | `--no-clipboard` | Pano paylaşımını kapat |
+| `--wake MAC` | Yalnızca bu MAC adresine Wake-on-LAN paketi gönderip çıkar |
 | `--no-announce` | Bekleyen tarafta kendini yerel ağda duyurma |
 | `--edge-delay MS` | Geçmeden önce imlecin kenara bu kadar milisaniye itilmesini bekle (varsayılan 0) |
 | `--config FILE` | Aynı ayarları TOML dosyasından oku (`side = "right"`, `connect = "..."`); komut satırı önceliklidir |

@@ -344,6 +344,18 @@ fn receiver_releases_held_keys_on_leave_and_disconnect() {
 }
 
 #[test]
+fn power_request_releases_held_keys_first() {
+    let mut mac = mac();
+    mac.peer_message(Message::Enter { x: 0, y: 0 });
+    mac.peer_message(Message::Key { usage: 0x04, down: true });
+    let actions = mac.peer_message(Message::Power(Power::Sleep));
+    assert_eq!(injected(&actions), vec![key(0x04, false)]);
+    assert_eq!(actions.last(), Some(&Action::Power(Power::Sleep)));
+    // No longer controlled: later input from the peer is not injected.
+    assert!(mac.peer_message(Message::MouseMove { x: 5, y: 5 }).is_empty());
+}
+
+#[test]
 fn unmatched_key_up_is_not_injected() {
     let mut mac = mac();
     mac.peer_message(Message::Enter { x: 0, y: 0 });

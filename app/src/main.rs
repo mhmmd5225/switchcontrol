@@ -21,9 +21,11 @@ mod identity;
 mod keyguard;
 mod net;
 mod pairing;
+mod power;
 mod theme;
 mod tls;
 mod tray;
+mod wake;
 
 use std::process::ExitCode;
 use std::sync::{Arc, mpsc};
@@ -47,6 +49,11 @@ fn main() -> ExitCode {
     }
 
     attach_console();
+    if let [flag, mac] = args.as_slice()
+        && flag == "--wake"
+    {
+        return wake(mac);
+    }
     let settings = match config::from_args(&args) {
         Ok(settings) => settings,
         Err(e) => {
@@ -85,6 +92,23 @@ fn main() -> ExitCode {
     }
     engine.wait();
     ExitCode::SUCCESS
+}
+
+fn wake(text: &str) -> ExitCode {
+    let Some(mac) = wake::parse_mac(text) else {
+        eprintln!("error: --wake: not a network card address: {text}");
+        return ExitCode::from(2);
+    };
+    match wake::send(mac) {
+        Ok(()) => {
+            println!("Wake-on-LAN packet sent to {}", wake::format_mac(mac));
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: cannot send the Wake-on-LAN packet: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// On Windows the program has no console of its own: in the terminal it

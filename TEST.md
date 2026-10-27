@@ -96,7 +96,25 @@ Aşağıda klavye ve farenin W'ye bağlı olduğu varsayıldı. Mac'in klavyesin
 | 6.3 | İki bilgisayarda oturumu kapatıp yeniden açın (ya da yeniden başlatın). | SwitchControl kendiliğinden simge olarak başlar (pencere bir an görünüp kaybolabilir) ve iki taraf birbirine bağlanır; geçiş çalışır. |
 | 6.4 | Anahtarı kapatın, yeniden oturum açın. | SwitchControl kendiliğinden başlamaz. |
 
-## 7. Gönderilecekler
+## 7. Uyutma, kapatma, uyandırma
+
+Hazırlık (bir kez):
+- **M:** Sistem Ayarları > Enerji > **Ağ erişimi için uyandır** açık.
+- **W:** Aygıt Yöneticisi > Ağ bağdaştırıcıları > kablolu kart > **Güç Yönetimi**: "Bu aygıtın bilgisayarı uyandırmasına izin ver" ve "Bilgisayarı yalnızca sihirli paket uyandırsın" açık; **Gelişmiş**: "Wake on Magic Packet" etkin. Kapalıyken uyandırma için ayrıca Güç Seçenekleri'nde **Hızlı başlatma** kapalı ve BIOS'ta **Wake on LAN** açık.
+- İki taraf da yeni sürüm olmalı; **Oturum açılınca başlat** iki tarafta açık olsun (bölüm 6).
+
+| # | Adım | Beklenen |
+|---|---|---|
+| 7.1 | Bağlıyken iki tarafta **Ayarlar > Uyandırma adresi (MAC)** alanına bakın. | Alan diğer bilgisayarın kablolu kartının adresiyle dolu (ör. `3C:22:FB:…`). Günlük'te `… can be woken at …` satırı. |
+| 7.2 | W'de Bağlantı sayfasında **Uyut**'a basın. | M uyur; W "Bağlanıyor…"/"Bağlantı bekleniyor"a döner ve **Diğer bilgisayarı uyandır** düğmesi çıkar. |
+| 7.3 | W'de **Diğer bilgisayarı uyandır**'a basın. | "Uyandırma paketi gönderildi" yazısı; M birkaç saniyede uyanır (ekran açılmayabilir, ağ uyanır) ve iki taraf yeniden bağlanır. |
+| 7.4 | M'de **Kapat**'a basın. | "… kapatılsın mı?" sorusu çıkar. **Vazgeç** hiçbir şey yapmaz. |
+| 7.5 | M'de **Kapat** > **Evet, kapat**. | W kapanır (kaydedilmemiş iş varsa Windows sorar). |
+| 7.6 | M'de **Diğer bilgisayarı uyandır**. | W açılır (BIOS ayarı açıksa), oturum açınca SwitchControl başlar ve bağlanır. |
+| 7.7 | W'de **Kapat**'a basın (hedef M). | Soruda turuncu uyarı: kapalı Mac ağdan uyandırılamaz. **Vazgeç** deyin. |
+| 7.8 | Simgenin menüsüne bakın, bağlıyken ve değilken. | Bağlıyken "Diğer bilgisayarı uyut/kapat…", değilken "…uyandır" seçilebilir. |
+
+## 8. Gönderilecekler
 
 - Hangi adımlar beklendiği gibi, hangileri değil (numaraları yeterli).
 - Sorunlu adımların ekran görüntüsü ve iki taraftaki **Günlük** içeriği.

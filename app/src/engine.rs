@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use sc_core::{Action, Config, EdgeHint, Node};
 use sc_platform::sys::{self, Capture, Injector};
 use sc_platform::{CaptureEvent, InputEvent};
-use sc_proto::{DEFAULT_PORT, Message, Os};
+use sc_proto::{DEFAULT_PORT, Message, Os, Power};
 
 use crate::clipboard;
 use crate::config::{NetMode, Settings};
@@ -21,12 +21,16 @@ use crate::discovery::{Announcer, Beacon};
 use crate::identity::{Identity, TrustStore};
 use crate::keyguard::KeyGuard;
 use crate::net::{self, Link, NetContext, NetEvent, PinSource, Waiting};
+use crate::power;
 use crate::tls::TlsConfig;
+use crate::wake;
 
 pub enum AppEvent {
     Capture(CaptureEvent),
     Net(NetEvent),
     Tick,
+    /// Ask the peer to sleep or shut down.
+    SendPower(Power),
     Stop,
 }
 
@@ -34,7 +38,13 @@ pub enum AppEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkState {
     Waiting(Waiting),
-    Connected { peer: String, addr: SocketAddr },
+    Connected {
+        peer: String,
+        addr: SocketAddr,
+        os: Os,
+        /// The peer's network card, for waking it later.
+        mac: Option<[u8; 6]>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +91,11 @@ impl Engine {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+    }
+
+    /// Asks the peer to sleep or shut down.
+    pub fn send_power(&self, power: Power) {
+        let _ = self.tx.send(AppEvent::SendPower(power));
     }
 
     /// Asks the engine to end and waits for it. A pending `AskPin` must be
@@ -203,10 +218,25 @@ fn run(
                     old.close();
                 }
                 log(format!("encrypted connection to {addr} (certificate {fingerprint})"));
-                report(Report::Link(LinkState::Connected { peer: hello.name.clone(), addr }));
+                if let Some(mac) = hello.mac {
+                    log(format!("{} can be woken at {}", hello.name, wake::format_mac(mac)));
+                }
+                report(Report::Link(LinkState::Connected {
+                    peer: hello.name.clone(),
+                    addr,
+                    os: hello.os,
+                    mac: hello.mac,
+                }));
                 node.peer_connected(hello)
             }
             AppEvent::Net(NetEvent::Log(text)) => vec![Action::Log(text)],
+            AppEvent::SendPower(power) => match out.link {
+                Some(_) => vec![
+                    Action::Log(format!("asking the other computer to {}", verb(power))),
+                    Action::Send(Message::Power(power)),
+                ],
+                None => vec![Action::Log("not connected to the other computer".into())],
+            },
             AppEvent::Net(NetEvent::Fatal(reason)) => {
                 result = Err(reason.into());
                 break;
@@ -352,8 +382,28 @@ impl Out<'_> {
                     self.log(line);
                 }
             }
+            Action::Power(power) => {
+                self.log(format!("the other computer asked this one to {}", verb(power)));
+                if self.io.injector.is_none() {
+                    return; // dry run
+                }
+                // Shutting down can wait on apps; the loop keeps going meanwhile.
+                let report = self.report.clone();
+                thread::spawn(move || {
+                    if let Err(e) = power::run(power) {
+                        report(Report::Log(e));
+                    }
+                });
+            }
             Action::Log(text) => self.log(text),
         }
+    }
+}
+
+fn verb(power: Power) -> &'static str {
+    match power {
+        Power::Sleep => "sleep",
+        Power::Shutdown => "shut down",
     }
 }
 
@@ -376,4 +426,92 @@ fn spawn_ticker(tx: Sender<AppEvent>) {
             thread::sleep(Duration::from_secs(1));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::TcpListener;
+    use std::path::Path;
+    use std::sync::mpsc::Receiver;
+
+    use super::*;
+    use crate::config::{self, FileConfig, RunFlags};
+
+    fn settings(name: &str, side: &str, net: NetMode, dir: &Path) -> Settings {
+        let (listen, connect) = match net {
+            NetMode::Listen(addr) => (Some(addr), None),
+            NetMode::Connect(addr) => (None, Some(addr)),
+        };
+        config::resolve(
+            FileConfig {
+                name: Some(name.into()),
+                side: Some(side.into()),
+                listen,
+                connect,
+                announce: Some(false),
+                data_dir: Some(dir.to_path_buf()),
+                ..FileConfig::default()
+            },
+            RunFlags { dry_run: true, ..RunFlags::default() },
+        )
+        .unwrap()
+    }
+
+    fn wait_for<T>(rx: &Receiver<Report>, what: &str, pick: impl Fn(Report) -> Option<T>) -> T {
+        loop {
+            match rx.recv_timeout(Duration::from_secs(10)) {
+                Ok(report) => {
+                    if let Some(found) = pick(report) {
+                        return found;
+                    }
+                }
+                Err(_) => panic!("timed out waiting for {what}"),
+            }
+        }
+    }
+
+    /// One computer asks the other to sleep; the other carries it out (in a
+    /// dry run, only logs it).
+    #[test]
+    fn power_request_reaches_the_other_computer() {
+        let tmp = std::env::temp_dir().join(format!("sc-engine-power-{}", std::process::id()));
+        let (mac_dir, pc_dir) = (tmp.join("mac"), tmp.join("pc"));
+        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let addr = format!("127.0.0.1:{port}");
+
+        let (mac_tx, mac_rx) = mpsc::channel();
+        let mac = Engine::start(
+            settings("Mac", "left", NetMode::Listen(addr.clone()), &mac_dir),
+            PinSource::Console,
+            Arc::new(move |r| drop(mac_tx.send(r))),
+        );
+        // The PIN the Mac shows goes to the PC, as the user would type it.
+        let (pin_tx, pin_rx) = mpsc::channel::<String>();
+        let (pc_tx, pc_rx) = mpsc::channel();
+        let pc = Engine::start(
+            settings("PC", "right", NetMode::Connect(addr), &pc_dir),
+            PinSource::Ask(Box::new(move |_| pin_rx.recv_timeout(Duration::from_secs(10)).ok())),
+            Arc::new(move |r| drop(pc_tx.send(r))),
+        );
+        let pin = wait_for(&mac_rx, "the PIN", |r| match r {
+            Report::ShowPin(pin) => Some(pin),
+            _ => None,
+        });
+        pin_tx.send(pin).unwrap();
+        let os = wait_for(&pc_rx, "the connection", |r| match r {
+            Report::Link(LinkState::Connected { os, .. }) => Some(os),
+            _ => None,
+        });
+        assert_eq!(os, Os::current());
+
+        pc.send_power(Power::Sleep);
+        wait_for(&mac_rx, "the request", |r| match r {
+            Report::Log(line) if line == "the other computer asked this one to sleep" => Some(()),
+            _ => None,
+        });
+
+        pc.stop();
+        mac.stop();
+        let _ = std::fs::remove_dir_all(tmp);
+    }
 }

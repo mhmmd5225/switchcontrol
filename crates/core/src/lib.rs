@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use sc_keymap::swap_ctrl_gui;
-use sc_proto::{Hello, InputEvent, Message, MouseButton, Os, PROTOCOL_VERSION, Rect};
+use sc_proto::{Hello, InputEvent, Message, MouseButton, Os, PROTOCOL_VERSION, Power, Rect};
 
 pub use layout::Side;
 use layout::{clamp_to_screens, map_span, on_edge};
@@ -69,6 +69,8 @@ pub enum Action {
     ShareClipboard,
     /// The peer shared its clipboard text: put it on this machine's clipboard.
     SetClipboard(String),
+    /// The peer asked this computer to sleep or shut down.
+    Power(Power),
     Log(String),
 }
 
@@ -142,6 +144,7 @@ impl Node {
             name: self.name.clone(),
             os: self.os,
             screens: self.screens.clone(),
+            mac: None,
         }
     }
 
@@ -247,6 +250,12 @@ impl Node {
             }
             Message::ReleaseAll => self.release_injected(&mut out),
             Message::Clipboard { text } => out.push(Action::SetClipboard(text)),
+            Message::Power(power) => {
+                // Nothing may stay held down across the sleep.
+                self.release_injected(&mut out);
+                self.controlled = false;
+                out.push(Action::Power(power));
+            }
             _ if !self.controlled => {}
             Message::MouseMove { x, y } => out.push(Action::Inject(InputEvent::MouseMove { x, y })),
             Message::Button { button, down } => {

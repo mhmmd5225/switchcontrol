@@ -30,6 +30,9 @@ usage: switchcontrol --side left|right [--listen ADDR | --connect ADDR] [options
   --dry-run           no capture or injection; log what would be injected
   -v, --verbose       log every message sent and received
 
+       switchcontrol --wake AA:BB:CC:DD:EE:FF
+  sends a Wake-on-LAN packet to that network card and exits
+
 The first connection between two computers needs pairing: the listening side
 shows a 6-digit PIN, which is entered on the connecting side.
 
@@ -78,6 +81,8 @@ pub struct FileConfig {
     pub announce: Option<bool>,
     /// Draw a bar at the shared edge when the cursor comes near (window only).
     pub edge_bar: Option<bool>,
+    /// The other computer's network card, for waking it (window only).
+    pub wake_mac: Option<String>,
     pub data_dir: Option<PathBuf>,
 }
 
@@ -154,6 +159,7 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
         clipboard: cli.clipboard.or(file.clipboard),
         announce: cli.announce.or(file.announce),
         edge_bar: file.edge_bar,
+        wake_mac: file.wake_mac,
         data_dir: cli.data_dir.or(file.data_dir),
     };
     resolve(merged, flags)

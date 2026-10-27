@@ -15,6 +15,7 @@ use eframe::egui::{self, RichText};
 use sc_core::Side;
 use sc_platform::Permissions;
 use sc_platform::sys;
+use sc_proto::{Os, Power};
 
 use crate::autostart;
 use crate::config::{self, FileConfig, RunFlags};
@@ -24,13 +25,17 @@ use crate::engine::{Engine, LinkState, Report};
 use crate::identity::{self, Fingerprint, TrustStore};
 use crate::net::{self, PinSource, Waiting};
 use crate::pairing::normalize_pin;
+use crate::power;
 use crate::theme::{self, Kind, Link, Palette};
-use crate::tray::{Tray, TrayCommand};
+use crate::tray::{PowerMenu, Tray, TrayCommand};
+use crate::wake;
 
 const SETTINGS_FILE: &str = "settings.toml";
 const LOG_LINES: usize = 500;
 /// The window does not resize: both pages are laid out to fit it.
-const WINDOW_SIZE: (f32, f32) = (460.0, 800.0);
+const WINDOW_SIZE: (f32, f32) = (460.0, 880.0);
+/// How long "packet sent" stays under the status after waking the other computer.
+const WAKE_NOTE: Duration = Duration::from_secs(6);
 
 /// The emergency hotkey as this OS spells it.
 const HOTKEY: &str =
@@ -99,6 +104,8 @@ struct Form {
     edge_bar: bool,
     clipboard: bool,
     announce: bool,
+    /// The other computer's network card, learned on connecting or typed in.
+    wake_mac: String,
     /// Kept from the file; the window has no field for it.
     listen: Option<String>,
 }
@@ -124,6 +131,7 @@ impl Form {
             edge_bar: file.edge_bar.unwrap_or(true),
             clipboard: file.clipboard.unwrap_or(true),
             announce: file.announce.unwrap_or(true),
+            wake_mac: file.wake_mac.unwrap_or_default(),
             listen: file.listen,
         }
     }
@@ -142,6 +150,7 @@ impl Form {
             edge_bar: Some(self.edge_bar),
             clipboard: Some(self.clipboard),
             announce: Some(self.announce),
+            wake_mac: Some(self.wake_mac.trim().to_string()).filter(|m| !m.is_empty()),
             data_dir: None,
         }
     }
@@ -205,6 +214,10 @@ pub struct GuiApp {
     quitting: bool,
     /// Whether the OS starts SwitchControl at login.
     autostart: bool,
+    /// Asking whether to really shut the other computer down.
+    confirm_shutdown: bool,
+    /// When the last Wake-on-LAN packet went out.
+    woken_at: Option<Instant>,
 }
 
 impl GuiApp {
@@ -235,6 +248,8 @@ impl GuiApp {
             hide_on_first_frame: false,
             quitting: false,
             autostart: autostart::is_enabled(),
+            confirm_shutdown: false,
+            woken_at: None,
         }
     }
 
@@ -265,6 +280,15 @@ impl GuiApp {
                         self.start()
                     }
                 }
+                TrayCommand::Sleep => self.send_power(Power::Sleep),
+                // Shutting down is asked about in the window.
+                TrayCommand::Shutdown => {
+                    self.page = Page::Connection;
+                    self.confirm_shutdown = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+                TrayCommand::Wake => self.wake(),
                 TrayCommand::Quit => {
                     self.quitting = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -278,8 +302,14 @@ impl GuiApp {
         }
         let status = self.status().0;
         let running = self.running.is_some();
+        let os = self.peer_os();
+        let menu = PowerMenu {
+            sleep: os.is_some_and(|os| power::supported(os, Power::Sleep)),
+            shutdown: os.is_some_and(|os| power::supported(os, Power::Shutdown)),
+            wake: os.is_none() && self.wake_mac().is_some(),
+        };
         if let Some(tray) = &mut self.tray {
-            tray.update(&status, running);
+            tray.update(&status, running, menu);
         }
     }
 
@@ -310,10 +340,8 @@ impl GuiApp {
             self.error = Some("Bağlanılacak bilgisayarın adresini girin.".into());
             return;
         }
+        self.save_settings();
         let file = self.form.to_file();
-        if let Err(e) = config::save(&self.data_dir.join(SETTINGS_FILE), &file) {
-            self.push_log(format!("could not save settings: {e}"));
-        }
         let flags = RunFlags { dry_run: self.dry_run, ..RunFlags::default() };
         let mut settings = match config::resolve(file, flags) {
             Ok(settings) => settings,
@@ -362,7 +390,56 @@ impl GuiApp {
         self.view.remote = false;
         self.view.show_pin = None;
         self.view.ask_pin = None;
+        self.confirm_shutdown = false;
         self.paired = paired_list(&self.data_dir);
+    }
+
+    /// The other computer's system, while connected.
+    fn peer_os(&self) -> Option<Os> {
+        match &self.view.link {
+            Some(LinkState::Connected { os, .. }) => Some(*os),
+            _ => None,
+        }
+    }
+
+    fn wake_mac(&self) -> Option<wake::Mac> {
+        wake::parse_mac(&self.form.wake_mac)
+    }
+
+    fn send_power(&mut self, power: Power) {
+        self.confirm_shutdown = false;
+        match self.running.as_ref().and_then(|r| r.engine.as_ref()) {
+            Some(engine) if self.peer_os().is_some() => engine.send_power(power),
+            _ => self.push_log("not connected to the other computer".into()),
+        }
+    }
+
+    /// Sends the Wake-on-LAN packet; works whether sharing runs or not.
+    fn wake(&mut self) {
+        let Some(mac) = self.wake_mac() else { return };
+        match wake::send(mac) {
+            Ok(()) => {
+                self.push_log(format!("Wake-on-LAN packet sent to {}", wake::format_mac(mac)));
+                self.woken_at = Some(Instant::now());
+                self.ctx.request_repaint_after(WAKE_NOTE);
+            }
+            Err(e) => self.error = Some(format!("Uyandırma paketi gönderilemedi: {e}")),
+        }
+    }
+
+    /// Keeps the address the other computer told us, for waking it later.
+    fn learn_mac(&mut self, mac: wake::Mac) {
+        if self.wake_mac() == Some(mac) {
+            return;
+        }
+        self.form.wake_mac = wake::format_mac(mac);
+        self.save_settings();
+    }
+
+    fn save_settings(&mut self) {
+        if let Err(e) = config::save(&self.data_dir.join(SETTINGS_FILE), &self.form.to_file()) {
+            self.push_log(format!("could not save settings: {e}"));
+        }
     }
 
     fn answer_pin(&mut self, pin: Option<String>) {
@@ -392,10 +469,14 @@ impl GuiApp {
                     // A new session (or the end of one) ends any pairing on screen.
                     self.view.show_pin = None;
                     self.view.ask_pin = None;
-                    if matches!(state, LinkState::Connected { .. }) {
+                    if let LinkState::Connected { mac, .. } = &state {
                         self.paired = paired_list(&self.data_dir);
+                        if let Some(mac) = *mac {
+                            self.learn_mac(mac);
+                        }
                     } else {
                         self.view.remote = false;
+                        self.confirm_shutdown = false;
                     }
                     self.view.link = Some(state);
                 }
@@ -485,15 +566,15 @@ impl GuiApp {
         );
     }
 
-    fn status_ui(&self, ui: &mut egui::Ui) {
+    fn status_ui(&mut self, ui: &mut egui::Ui) {
         let (title, detail, link) = self.status();
         let peer = match &self.view.link {
-            Some(LinkState::Connected { peer, .. }) => peer.as_str(),
-            _ => "—",
+            Some(LinkState::Connected { peer, .. }) => peer.clone(),
+            _ => "—".into(),
         };
         theme::card(ui, |ui| {
             let p = Palette::of(ui);
-            theme::monitors(ui, self.form.side == Side::Left, link, self.form.name.trim(), peer);
+            theme::monitors(ui, self.form.side == Side::Left, link, self.form.name.trim(), &peer);
             ui.vertical_centered(|ui| {
                 ui.label(theme::semibold(title).size(16.0));
                 if !detail.is_empty() {
@@ -504,7 +585,93 @@ impl GuiApp {
                     ui.label(RichText::new(error).color(p.red));
                 }
             });
+            self.power_ui(ui, &peer);
         });
+        self.confirm_shutdown_ui(ui);
+    }
+
+    /// Sleep and shut down while connected, wake while not.
+    fn power_ui(&mut self, ui: &mut egui::Ui, peer: &str) {
+        let p = Palette::of(ui);
+        let mut pick = None;
+        if let Some(os) = self.peer_os() {
+            let actions =
+                [(Power::Sleep, "Uyut", Kind::Secondary), (Power::Shutdown, "Kapat", Kind::Danger)];
+            let actions: Vec<_> =
+                actions.into_iter().filter(|(power, ..)| power::supported(os, *power)).collect();
+            if actions.is_empty() {
+                return;
+            }
+            ui.add_space(6.0);
+            centered(ui, |ui| {
+                ui.label(RichText::new(format!("{peer}:")).color(p.muted));
+                for (power, label, kind) in actions {
+                    if theme::button(ui, label, kind).clicked() {
+                        pick = Some(power);
+                    }
+                }
+            });
+        } else if self.wake_mac().is_some() {
+            ui.add_space(6.0);
+            centered(ui, |ui| {
+                if theme::button(ui, "Diğer bilgisayarı uyandır", Kind::Secondary).clicked() {
+                    self.wake();
+                }
+            });
+            if self.woken_at.is_some_and(|at| at.elapsed() < WAKE_NOTE) {
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        RichText::new(
+                            "Uyandırma paketi gönderildi; açılması birkaç saniye sürebilir.",
+                        )
+                        .small()
+                        .color(p.muted),
+                    );
+                });
+            }
+        }
+        match pick {
+            Some(Power::Shutdown) => self.confirm_shutdown = true,
+            Some(power) => self.send_power(power),
+            None => {}
+        }
+    }
+
+    fn confirm_shutdown_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(os) = self.peer_os().filter(|_| self.confirm_shutdown) else { return };
+        let peer = match &self.view.link {
+            Some(LinkState::Connected { peer, .. }) => peer.clone(),
+            _ => return,
+        };
+        let p = Palette::of(ui);
+        ui.add_space(8.0);
+        let mut answer = None;
+        theme::notice(ui, p.red, |ui| {
+            ui.label(theme::semibold(format!("{peer} kapatılsın mı?")));
+            ui.label(RichText::new("Kaydedilmemiş işler kaybolabilir.").color(p.muted));
+            if os == Os::MacOs {
+                ui.label(
+                    RichText::new(
+                        "Kapalı bir Mac ağdan uyandırılamaz; sonra uyandırmak için Uyut'u seçin.",
+                    )
+                    .color(p.amber),
+                );
+            }
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if theme::button(ui, "Evet, kapat", Kind::Danger).clicked() {
+                    answer = Some(true);
+                }
+                if theme::button(ui, "Vazgeç", Kind::Ghost).clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        match answer {
+            Some(true) => self.send_power(Power::Shutdown),
+            Some(false) => self.confirm_shutdown = false,
+            None => {}
+        }
     }
 
     fn permissions_ui(&mut self, ui: &mut egui::Ui) {
@@ -753,6 +920,8 @@ impl GuiApp {
                 );
             }
             theme::divider(ui);
+            self.wake_row_ui(ui);
+            theme::divider(ui);
             let mut forget = false;
             theme::row(ui, &format!("Eşleşmiş bilgisayar: {}", self.paired.len()), |ui| {
                 let can_forget = !running && !self.paired.is_empty();
@@ -771,6 +940,36 @@ impl GuiApp {
                 self.paired = paired_list(&self.data_dir);
             }
         });
+    }
+
+    /// The other computer's network card, for waking it.
+    fn wake_row_ui(&mut self, ui: &mut egui::Ui) {
+        let p = Palette::of(ui);
+        let valid = self.form.wake_mac.trim().is_empty() || self.wake_mac().is_some();
+        let (label, edit) = theme::row(ui, "Uyandırma adresi (MAC)", |ui| {
+            theme::text_field(
+                ui,
+                &mut self.form.wake_mac,
+                "bağlanınca dolar",
+                170.0,
+                egui::TextStyle::Monospace,
+            )
+        });
+        let edit = edit.labelled_by(label.id);
+        if edit.lost_focus() && valid {
+            self.save_settings();
+        }
+        let note = if valid {
+            RichText::new(
+                "Mac: Sistem Ayarları > Enerji > Ağ erişimi için uyandır. \
+                 Windows: ağ kartında Wake on Magic Packet.",
+            )
+            .small()
+            .weak()
+        } else {
+            RichText::new("Adres AA:BB:CC:DD:EE:FF biçiminde olmalı.").small().color(p.red)
+        };
+        ui.label(note);
     }
 
     fn log_ui(&self, ui: &mut egui::Ui) {
@@ -867,6 +1066,23 @@ impl eframe::App for GuiApp {
     fn on_exit(&mut self) {
         self.running = None;
     }
+}
+
+/// Lays out a row of widgets centred in the available width.
+fn centered(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    // Measured on the first pass, centred from then on.
+    let id = ui.scope_id().with("centered-width");
+    let width: f32 = ui.ctx().data(|d| d.get_temp(id)).unwrap_or(0.0);
+    ui.horizontal(|ui| {
+        ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
+        let start = ui.cursor().min.x;
+        add(ui);
+        let used = ui.min_rect().right() - start;
+        if (used - width).abs() > 0.5 {
+            ui.ctx().data_mut(|d| d.insert_temp(id, used));
+            ui.ctx().request_repaint();
+        }
+    });
 }
 
 /// The computers heard on the network; picking one fills in its address.
@@ -1025,6 +1241,62 @@ mod tests {
             harness.run_steps(8);
             assert_eq!(harness.get_by_label(label).rect(), before, "{label} moved on hover");
         }
+    }
+
+    fn connected(harness: &mut Harness<'_, GuiApp>, os: Os) {
+        harness.state_mut().view.link = Some(LinkState::Connected {
+            peer: "Öteki".into(),
+            addr: "192.0.2.5:24800".parse().unwrap(),
+            os,
+            mac: Some([0x3C, 0x22, 0xFB, 0x0A, 0xB1, 0x07]),
+        });
+        harness.run_steps(3);
+    }
+
+    /// A Mac can be put to sleep or shut down; shutting down asks first and
+    /// warns that a Mac that is off cannot be woken.
+    #[test]
+    fn power_buttons_follow_the_other_computer() {
+        let dir = temp_dir("power");
+        let mut harness = harness(&dir);
+        connected(&mut harness, Os::MacOs);
+        harness.get_by_label("Uyut");
+        harness.get_by_label("Kapat").click();
+        harness.run_steps(3);
+        assert!(harness.state().confirm_shutdown);
+        harness.get_by_label("Öteki kapatılsın mı?");
+        harness.get_by_label_contains("Kapalı bir Mac ağdan uyandırılamaz");
+        harness.get_by_label("Vazgeç").click();
+        harness.run_steps(3);
+        assert!(!harness.state().confirm_shutdown);
+
+        // Windows: shutting down only.
+        connected(&mut harness, Os::Windows);
+        assert!(harness.query_by_label("Uyut").is_none());
+        harness.get_by_label("Kapat").click();
+        harness.run_steps(3);
+        assert!(harness.query_by_label_contains("Kapalı bir Mac").is_none());
+        harness.get_by_label("Evet, kapat");
+    }
+
+    /// The address the other computer sends is kept, and offers waking it
+    /// once it is gone.
+    #[test]
+    fn learned_address_offers_waking() {
+        let dir = temp_dir("wake");
+        let mut harness = harness(&dir);
+        harness.step();
+        assert!(harness.query_by_label("Diğer bilgisayarı uyandır").is_none());
+
+        harness.state_mut().learn_mac([0x3C, 0x22, 0xFB, 0x0A, 0xB1, 0x07]);
+        harness.run_steps(3);
+        harness.get_by_label("Diğer bilgisayarı uyandır");
+        let saved = config::load(&dir.join(SETTINGS_FILE)).unwrap();
+        assert_eq!(saved.wake_mac.as_deref(), Some("3C:22:FB:0A:B1:07"));
+
+        connected(&mut harness, Os::Windows);
+        assert!(harness.query_by_label("Diğer bilgisayarı uyandır").is_none());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

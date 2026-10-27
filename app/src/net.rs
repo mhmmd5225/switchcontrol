@@ -21,6 +21,7 @@ use crate::engine::AppEvent;
 use crate::identity::{Fingerprint, TrustStore};
 use crate::pairing::{self, Role};
 use crate::tls::{Secure, SecureReader, TlsConfig};
+use crate::wake;
 
 const PEER_TIMEOUT: Duration = Duration::from_secs(5);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -331,7 +332,9 @@ fn session(
         secure.socket().set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
     }
 
-    write_frame(&mut writer, &Message::Hello(hello.clone()))?;
+    // The card this connection uses is the one the peer can wake us through.
+    let mac = secure.socket().local_addr().ok().and_then(|local| wake::mac_for(local.ip()));
+    write_frame(&mut writer, &Message::Hello(Hello { mac, ..hello.clone() }))?;
     let peer = match read_frame(&mut reader)? {
         Message::Hello(peer) => peer,
         other => return Err(invalid(format!("expected Hello, got {other:?}"))),
