@@ -25,15 +25,20 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_ESCAPE, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_RCONTROL, VK_RMENU, VK_RSHIFT,
 };
+use windows::Win32::UI::Input::{
+    GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTDEVICE, RAWINPUTHEADER, RID_INPUT,
+    RIDEV_INPUTSINK, RIDEV_REMOVE, RIM_TYPEMOUSE, RegisterRawInputDevices,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CreateCursor, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetMessageW, HC_ACTION, HHOOK, HWND_TOPMOST, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_UP,
-    LWA_ALPHA, MSG, MSLLHOOKSTRUCT, PostThreadMessageW, RegisterClassW, SW_HIDE, SWP_NOACTIVATE,
-    SWP_SHOWWINDOW, SetLayeredWindowAttributes, SetWindowPos, SetWindowsHookExW, ShowWindow,
-    TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_APP, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CallNextHookEx, ClipCursor, CreateCursor, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    DispatchMessageW, GetMessageW, HC_ACTION, HHOOK, HWND_TOPMOST, KBDLLHOOKSTRUCT, LLKHF_EXTENDED,
+    LLKHF_UP, LWA_ALPHA, MSG, MSLLHOOKSTRUCT, PostThreadMessageW, RegisterClassW, SW_HIDE,
+    SWP_NOACTIVATE, SWP_SHOWWINDOW, SetLayeredWindowAttributes, SetWindowPos, SetWindowsHookExW,
+    ShowWindow, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_APP,
+    WM_INPUT, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN,
+    WM_XBUTTONUP, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_POPUP,
 };
 use windows::core::{Result, w};
 
@@ -50,6 +55,8 @@ pub struct Capture {
 /// State shared between the owner and the hook thread.
 struct Shared {
     grab: AtomicBool,
+    /// Game mode: raw mouse motion is reported even while the cursor is local.
+    game: AtomicBool,
     /// Set once the hook has seen our parking move, so deltas can be trusted.
     parked: AtomicBool,
     park_x: AtomicI32,
@@ -62,6 +69,7 @@ impl Capture {
         let (ready_tx, ready_rx) = mpsc::channel();
         let shared = Arc::new(Shared {
             grab: AtomicBool::new(false),
+            game: AtomicBool::new(false),
             parked: AtomicBool::new(false),
             park_x: AtomicI32::new(0),
             park_y: AtomicI32::new(0),
@@ -107,6 +115,16 @@ impl Capture {
     pub fn is_grabbing(&self) -> bool {
         self.shared.grab.load(Ordering::SeqCst)
     }
+
+    /// Game mode: also report raw mouse motion while the cursor is local, so
+    /// a cursor that a game traps (clipped to its window, pulled back to the
+    /// centre) can still be told to push against the screen edge.
+    pub fn set_game_mode(&self, on: bool) {
+        self.shared.game.store(on, Ordering::SeqCst);
+        let _ = unsafe {
+            PostThreadMessageW(self.thread_id, WM_SC_GAME, WPARAM(usize::from(on)), LPARAM(0))
+        };
+    }
 }
 
 impl Drop for Capture {
@@ -132,10 +150,16 @@ fn park_point() -> (i32, i32) {
 /// Thread message to the hook thread: a grab started (wparam 1) or ended (0).
 const WM_SC_GRAB: u32 = WM_APP + 1;
 
+/// Thread message to the hook thread: game mode on (wparam 1) or off (0).
+const WM_SC_GAME: u32 = WM_APP + 2;
+
 /// Side of the square window that hides the parked cursor.
 const COVER_SIZE: i32 = 64;
 
 fn begin_grab(cover: HWND) {
+    // A game may have confined the cursor to its window, out of reach of the
+    // parking spot.
+    let _ = unsafe { ClipCursor(None) };
     let (x, y) = park_point();
     let half = COVER_SIZE / 2;
     unsafe {
@@ -212,7 +236,61 @@ unsafe extern "system" fn cover_wndproc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if msg == WM_INPUT {
+        report_raw_motion(HRAWINPUT(lparam.0 as _));
+    }
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+/// Asks for (or stops) raw mouse input at `window`, also while another
+/// window, such as a game, is in front.
+fn register_raw_mouse(window: HWND, on: bool) {
+    let device = RAWINPUTDEVICE {
+        usUsagePage: 0x01, // generic desktop
+        usUsage: 0x02,     // mouse
+        dwFlags: if on { RIDEV_INPUTSINK } else { RIDEV_REMOVE },
+        hwndTarget: if on { window } else { HWND::default() },
+    };
+    let _ = unsafe { RegisterRawInputDevices(&[device], size_of::<RAWINPUTDEVICE>() as u32) };
+}
+
+/// Passes a raw mouse move on as `MouseDelta`, in game mode while the cursor
+/// is local. While grabbing, the hook already reports the motion.
+fn report_raw_motion(handle: HRAWINPUT) {
+    STATE.with_borrow(|state| {
+        let Some(s) = state else { return };
+        if !s.shared.game.load(Ordering::SeqCst) || s.shared.grab.load(Ordering::SeqCst) {
+            return;
+        }
+        if let Some((dx, dy)) = raw_mouse_motion(handle) {
+            let _ = s.tx.send(CaptureEvent::Input(InputEvent::MouseDelta { dx, dy }));
+        }
+    });
+}
+
+/// The relative motion in a raw input message, if it is a relative mouse move.
+fn raw_mouse_motion(handle: HRAWINPUT) -> Option<(i32, i32)> {
+    let header = size_of::<RAWINPUTHEADER>() as u32;
+    let mut size = 0u32;
+    unsafe { GetRawInputData(handle, RID_INPUT, None, &mut size, header) };
+    // Eight-byte units: the buffer is read as a RAWINPUT.
+    let mut buffer = vec![0u64; (size as usize).div_ceil(8)];
+    let read = unsafe {
+        GetRawInputData(handle, RID_INPUT, Some(buffer.as_mut_ptr().cast()), &mut size, header)
+    };
+    if read == u32::MAX {
+        return None;
+    }
+    let input = unsafe { &*(buffer.as_ptr().cast::<RAWINPUT>()) };
+    if input.header.dwType != RIM_TYPEMOUSE.0 {
+        return None;
+    }
+    let mouse = unsafe { input.data.mouse };
+    // Bit 0 of the flags: absolute motion (tablets, remote desktops).
+    if mouse.usFlags.0 & 1 != 0 {
+        return None;
+    }
+    Some((mouse.lLastX, mouse.lLastY))
 }
 
 /// Per-thread state reachable from the hook callbacks, which take no context.
@@ -271,6 +349,10 @@ impl Hooks {
         let mut msg = MSG::default();
         unsafe {
             while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
+                if msg.hwnd.0.is_null() && msg.message == WM_SC_GAME {
+                    register_raw_mouse(self.cover, msg.wParam.0 == 1);
+                    continue;
+                }
                 if msg.hwnd.0.is_null() && msg.message == WM_SC_GRAB {
                     let on = msg.wParam.0 == 1;
                     self.set_keyboard_hook(on);

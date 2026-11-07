@@ -23,6 +23,8 @@ usage: switchcontrol --side left|right [--listen ADDR | --connect ADDR] [options
   --speed F           pointer speed on the peer (default 1.0)
   --scroll-speed F    scrolling speed on the peer (default 1.0)
   --no-swap           keep Ctrl and Cmd/Win as they are
+  --game-mode         cross to the peer by pushing against the edge even while a game
+                      or full-screen app keeps the cursor from reaching it (Windows)
   --edge-delay MS     push against the edge this long before crossing (default 0)
   --no-clipboard      do not share clipboard text with the other computer
   --no-announce       do not make this computer visible on the local network
@@ -56,6 +58,8 @@ pub struct Settings {
     pub speed: f64,
     pub scroll_speed: f64,
     pub edge_delay: Duration,
+    /// Cross even while a game traps the cursor, by pushing the mouse.
+    pub game_mode: bool,
     /// Share clipboard text when control passes between the computers.
     pub clipboard: bool,
     /// While listening, announce this computer on the local network.
@@ -90,6 +94,8 @@ pub struct FileConfig {
     pub edge_bar: Option<bool>,
     /// The other computer's network card, for waking it (window only).
     pub wake_mac: Option<String>,
+    /// Cross by pushing even while a game or full-screen app traps the cursor.
+    pub game_mode: Option<bool>,
     /// Wake the other computer whenever sharing starts, e.g. at login (window only).
     pub wake_on_start: Option<bool>,
     /// Start sharing as soon as the window program opens (window only).
@@ -131,6 +137,7 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
                     Some(raw.parse().map_err(|_| format!("--scroll-speed: not a number: {raw}"))?);
             }
             "--no-swap" => cli.swap_ctrl_cmd = Some(false),
+            "--game-mode" => cli.game_mode = Some(true),
             "--no-clipboard" => cli.clipboard = Some(false),
             "--no-announce" => cli.announce = Some(false),
             "--edge-delay" => {
@@ -173,6 +180,7 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
         announce: cli.announce.or(file.announce),
         edge_bar: file.edge_bar,
         wake_mac: file.wake_mac,
+        game_mode: cli.game_mode.or(file.game_mode),
         wake_on_start: file.wake_on_start,
         start_on_launch: file.start_on_launch,
         window_size: file.window_size,
@@ -216,6 +224,7 @@ pub fn resolve(config: FileConfig, flags: RunFlags) -> Result<Settings, String> 
         speed,
         scroll_speed,
         edge_delay: Duration::from_millis(edge_delay_ms),
+        game_mode: config.game_mode.unwrap_or(false),
         clipboard: config.clipboard.unwrap_or(true),
         announce: config.announce.unwrap_or(true),
         pin: flags.pin,
@@ -287,6 +296,15 @@ mod tests {
         assert!(s.clipboard);
         assert_eq!(s.speed, 1.0);
         assert!(!parse("--side right --no-clipboard").unwrap().clipboard);
+    }
+
+    #[test]
+    fn game_mode_is_off_unless_asked_for() {
+        assert!(!parse("--side right").unwrap().game_mode);
+        assert!(parse("--side right --game-mode").unwrap().game_mode);
+        let file =
+            FileConfig { side: Some("left".into()), game_mode: Some(true), ..Default::default() };
+        assert!(resolve(file, RunFlags::default()).unwrap().game_mode);
     }
 
     #[test]

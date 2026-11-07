@@ -71,6 +71,9 @@ impl Capture {
     pub fn is_grabbing(&self) -> bool {
         self.shared.grab.load(Ordering::SeqCst)
     }
+
+    /// Only Windows traps the cursor this way for now.
+    pub fn set_game_mode(&self, _on: bool) {}
 }
 
 impl Drop for Capture {

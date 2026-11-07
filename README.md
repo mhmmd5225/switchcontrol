@@ -46,6 +46,15 @@ Mac'te *Ayarlar > Şifre ekranında çalış > Kur* (bir kez yönetici şifresi 
 - Uygulama Uygulamalar klasöründe olmalı. İsterseniz `SwitchControl-macOS.pkg` yükleyicisi uygulamayı oraya koyar ve hizmeti kurar (imzasız olduğu için ilk açılışta sağ tık > **Aç**).
 - **Sınırlar:** macOS bu ekranlarda yazılımın gönderdiği girdiyi kabul etmeyebilir (gerçek Mac'te denenmelidir). FileVault açıksa bilgisayar yeniden başlatıldıktan sonraki ilk disk açma ekranında ağ yoktur; orada hiçbir yazılım çalışmaz. Uykudan uyanıp kilit ekranına gelmek çalışabilir.
 
+### Oyunlarda ve tam ekranda geçiş (Windows)
+
+Oyunlar ve tam ekran uygulamalar imleci penceresine kilitler ya da her karede ekranın ortasına çeker; imleç ekran kenarına hiç ulaşmadığı için geçiş olmaz. *Ayarlar > Oyunlarda ve tam ekranda geçiş* açıksa SwitchControl fare hareketini ham girdiden (raw input) de okur: fare hareket ediyor ama imleç gelmiyorsa imleç sıkışmış sayılır ve sanal bir imleç, gerçek fare hareketiyle ekran kenarına itilir. Kenara yaklaşık **0,8 saniye** (ya da *Geçiş* ayarı daha uzunsa o kadar) itilince diğer bilgisayara geçilir. Normal masaüstünde hiçbir şey değişmez; sıkışma yoksa sanal imleç devreye girmez. Düğme basılıyken (ör. ateş ederken) geçilmez.
+
+- Varsayılan **kapalı**: birinci şahıs oyunlarda kamerayı sürekli aynı yöne çevirmek sanal imleci kenara iter ve yanlışlıkla geçebilir. Olursa **Ctrl+Alt+Shift+Esc** kontrolü geri getirir.
+- Kontrol karşıdayken oyunun kendi kilidi kaldırılır (`ClipCursor`), ama bazı oyunlar ham girdiyi kanca engellese de almaya devam edebilir (oyun kamerası kımıldar).
+- Yönetici olarak çalışan oyunlar ve global kanca engelleyen bazı hile korumaları bu yöntemi de engelleyebilir.
+- Komut satırında `--game-mode`. Mac'te (oyun Mac'teyken) bu seçenek şimdilik etkisizdir.
+
 ### Uyutma, kapatma, uyandırma
 
 Bağlıyken *Bağlantı* sayfasındaki durum kartında diğer bilgisayar için düğmeler çıkar: Mac için *Uyut* ve *Kapat*, Windows için *Kapat* (kapatmadan önce sorulur). Mac `pmset sleepnow` ile uyur, `System Events` ile kapanır (macOS ilk seferde bu izni sorar); Windows `shutdown /s /t 0` ile kapanır. Kaydedilmemiş işi olan uygulamalar kapanmayı durdurabilir.
@@ -99,6 +108,7 @@ switchcontrol --side left --connect 192.168.1.20
 | `--name NAME` | Karşıya gösterilen ad (varsayılan bilgisayar adı) |
 | `--speed F` | Karşı ekrandaki imleç hızı çarpanı (varsayılan 1.0) |
 | `--scroll-speed F` | Karşı ekrandaki kaydırma hızı çarpanı (varsayılan 1.0); penceredeki karşılığı *Ayarlar > Kaydırma hızı* |
+| `--game-mode` | Oyun ya da tam ekran uygulama imleci kilitlese de kenara itince geçiş (Windows) |
 | `--no-swap` | Ctrl ↔ Cmd/Win değişimini kapat |
 | `--no-clipboard` | Pano paylaşımını kapat |
 | `--wake MAC` | Yalnızca bu MAC adresine Wake-on-LAN paketi gönderip çıkar |

@@ -137,7 +137,20 @@ Hazırlık: M'de **Ayarlar > Şifre ekranı > Kur** (yönetici şifresi) ya da `
 | 9.5 | Oturum açtıktan sonra. | Bağlantı birkaç saniyede pencereli uygulamaya geçer ve devam eder. |
 | 9.6 | **Kaldır**. | Durum "kurulu değil"; yeniden başlatınca oturum açma ekranında bağlantı olmaz. |
 
-## 10. Gönderilecekler
+## 10. Oyun ve tam ekran (Windows)
+
+W'de **Ayarlar > Oyunlarda ve tam ekranda geçiş** açık olsun (Durdur, değiştir, Başlat).
+
+| # | Adım | Beklenen |
+|---|---|---|
+| 10.1 | Normal masaüstünde fareyi kenara götürün. | Geçiş eskisi gibi çalışır; anahtarın açık olması bir şeyi değiştirmez. |
+| 10.2 | Bir oyunu ya da tam ekran uygulamayı (ör. bir video oynatıcıyı tam ekran) açın. Fareyi sağa doğru sürekli, kenara itiyormuş gibi sürün ve yaklaşık 1 saniye tutun. | Yaklaşık 0,8 sn sonra imleç M'ye geçer. Kısa dokunuşlarla geçmez. |
+| 10.3 | Birinci şahıs bir oyunda kamerayı sağa çevirin (uzun süre). | Yanlışlıkla geçerse not edin; **Ctrl+Alt+Shift+Esc** geri getirmeli. (Bunun sık olması "yanlış geçiş" sorunudur: bildirin.) |
+| 10.4 | Oyunda sol tuşu basılı tutarak kenara itin. | Geçmez (düğme basılıyken geçiş yok). |
+| 10.5 | M'deyken (kontrol karşıda) W'deki oyuna bakın. | Oyun kamerası kımıldamamalı. Kımıldıyorsa bildirin (bazı oyunlar ham girdiyi kanca engellese de alır). |
+| 10.6 | Anahtarı kapatın, 10.2'yi tekrarlayın. | Oyunda geçiş olmaz (eski davranış). |
+
+## 11. Gönderilecekler
 
 - Hangi adımlar beklendiği gibi, hangileri değil (numaraları yeterli).
 - Sorunlu adımların ekran görüntüsü ve iki taraftaki **Günlük** içeriği.

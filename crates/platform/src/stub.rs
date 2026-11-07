@@ -57,6 +57,8 @@ impl Capture {
     pub fn is_grabbing(&self) -> bool {
         false
     }
+
+    pub fn set_game_mode(&self, _on: bool) {}
 }
 
 #[derive(Default)]

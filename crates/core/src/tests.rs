@@ -14,6 +14,7 @@ fn config(peer_side: Side) -> Config {
         speed: 1.0,
         scroll_speed: 1.0,
         edge_delay: Duration::ZERO,
+        game_mode: false,
     }
 }
 
@@ -463,4 +464,83 @@ fn scroll_speed_scales_the_wheel_and_keeps_fractions() {
 
     pc.config.scroll_speed = 2.0;
     assert_eq!(wheel(&mut pc, -120), vec![Message::Wheel { dx: 0, dy: -240 }]);
+}
+
+/// A Windows PC like `pc()`, in game mode.
+fn gaming_pc() -> Node {
+    let mut node = pc();
+    node.config.game_mode = true;
+    node
+}
+
+/// Pushes the mouse to the right in 15-count steps every 10 ms, while a game
+/// pulls the cursor back to the centre after each step. Returns the step at
+/// which control went to the peer, if it did within `steps`.
+fn push_against_a_game(node: &mut Node, steps: u32) -> Option<u32> {
+    let mut at = Instant::now();
+    for step in 0..steps {
+        at += Duration::from_millis(10);
+        let mut actions = node.local_input_at(delta(15, 0), at);
+        actions.extend(node.local_input_at(moved(1280, 720), at));
+        if sent(&actions).iter().any(|m| matches!(m, Message::Enter { .. })) {
+            return Some(step);
+        }
+    }
+    None
+}
+
+#[test]
+fn a_trapped_cursor_crosses_after_a_long_push() {
+    let mut pc = gaming_pc();
+    // The virtual cursor takes about 90 steps to get from the centre to the
+    // edge, then it has to push for 800 ms (80 steps).
+    let step = push_against_a_game(&mut pc, 1000).expect("crossed");
+    assert!((150..=200).contains(&step), "crossed at step {step}");
+    assert!(pc.is_remote());
+}
+
+#[test]
+fn a_trapped_cursor_does_not_cross_without_game_mode() {
+    let mut pc = pc();
+    assert_eq!(push_against_a_game(&mut pc, 1000), None);
+    assert!(!pc.is_remote());
+}
+
+#[test]
+fn a_trapped_cursor_does_not_cross_while_a_button_is_held() {
+    let mut pc = gaming_pc();
+    pc.local_input(InputEvent::Button { button: MouseButton::Left, down: true });
+    assert_eq!(push_against_a_game(&mut pc, 1000), None);
+}
+
+#[test]
+fn a_cursor_that_follows_the_mouse_is_left_alone() {
+    let mut pc = gaming_pc();
+    let mut at = Instant::now();
+    // Mouse counts and cursor pixels agree, as on the desktop.
+    for step in 0..120 {
+        at += Duration::from_millis(10);
+        let x = 1200 + step * 10;
+        let mut actions = pc.local_input_at(delta(10, 0), at);
+        actions.extend(pc.local_input_at(moved(x, 720), at));
+        assert!(sent(&actions).is_empty(), "crossed early at x = {x}");
+    }
+    // Touching the real edge crosses at once, as without game mode.
+    assert!(!sent(&pc.local_input_at(moved(2559, 720), at)).is_empty());
+}
+
+#[test]
+fn a_cursor_the_game_lets_go_of_is_real_again() {
+    let mut pc = gaming_pc();
+    // Trapped at the centre, no crossing yet.
+    let mut at = Instant::now();
+    for _ in 0..10 {
+        at += Duration::from_millis(10);
+        pc.local_input_at(delta(15, 0), at);
+        pc.local_input_at(moved(1280, 720), at);
+    }
+    assert!(!pc.is_remote());
+    // The game's menu frees the cursor and it goes to the edge.
+    let actions = pc.local_input_at(moved(2559, 720), at);
+    assert!(sent(&actions).iter().any(|m| matches!(m, Message::Enter { .. })));
 }

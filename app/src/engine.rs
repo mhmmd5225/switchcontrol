@@ -141,6 +141,7 @@ fn run(
             speed: settings.speed,
             scroll_speed: settings.scroll_speed,
             edge_delay: settings.edge_delay,
+            game_mode: settings.game_mode,
         },
         Os::current(),
         settings.name.clone(),
@@ -153,6 +154,10 @@ fn run(
         let capture = if settings.no_capture { None } else { Some(start_capture(tx.clone())?) };
         Io { capture, injector: Some(Injector::new()) }
     };
+
+    if let Some(capture) = &io.capture {
+        capture.set_game_mode(settings.game_mode);
+    }
 
     let data_dir = &settings.data_dir;
     let identity = Identity::load_or_create(data_dir)

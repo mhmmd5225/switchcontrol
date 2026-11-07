@@ -33,6 +33,10 @@ use crate::wake;
 use crate::window::{self, Pref};
 
 const LOG_LINES: usize = 500;
+/// Under the game-mode switch: what it does and what it risks.
+const GAME_NOTE: &str = "Bir oyun imleci kilitlese de kenara yaklaşık 0,8 sn itince diğer \
+    bilgisayara geçer. Kamerayı çevirirken yanlışlıkla geçebilir; \
+    Ctrl+Alt+Shift+Esc her zaman geri getirir.";
 /// Under the login-screen switch: what it is for and what it needs.
 const LOGIN_NOTE: &str = "Kilit ve oturum açma ekranında diğer bilgisayarın klavyesiyle şifre \
     yazabilmek için. Bir kez yönetici şifresi ister. FileVault açıksa bilgisayar ilk açılışta \
@@ -121,6 +125,7 @@ struct Form {
     /// Start sharing as soon as the program opens.
     start_on_launch: bool,
     window: Pref,
+    game_mode: bool,
     /// Kept from the file; the window has no field for it.
     listen: Option<String>,
 }
@@ -150,6 +155,7 @@ impl Form {
             wake_on_start: file.wake_on_start.unwrap_or(false),
             start_on_launch: file.start_on_launch.unwrap_or(true),
             window: Pref::parse(file.window_size.as_deref()),
+            game_mode: file.game_mode.unwrap_or(false),
             listen: file.listen,
         }
     }
@@ -172,6 +178,7 @@ impl Form {
             wake_on_start: Some(self.wake_on_start),
             start_on_launch: Some(self.start_on_launch),
             window_size: Some(self.window.as_str().to_string()),
+            game_mode: Some(self.game_mode),
             data_dir: None,
         }
     }
@@ -1024,6 +1031,13 @@ impl GuiApp {
                 theme::divider(ui);
                 let clip = "Pano paylaşımı";
                 theme::row(ui, clip, |ui| theme::switch(ui, &mut form.clipboard, clip));
+                // Only Windows can tell a trapped cursor from a free one.
+                if cfg!(windows) || cfg!(test) {
+                    theme::divider(ui);
+                    let game = "Oyunlarda ve tam ekranda geçiş";
+                    theme::row(ui, game, |ui| theme::switch(ui, &mut form.game_mode, game));
+                    ui.label(RichText::new(GAME_NOTE).small().weak());
+                }
             });
         });
     }
@@ -1604,6 +1618,29 @@ mod tests {
         harness.state_mut().launched(false);
         assert!(harness.state().running.is_none());
         assert!(harness.state().error.is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The game-mode switch is saved with the other settings and reaches the engine's settings.
+    #[test]
+    fn game_mode_is_saved_and_used() {
+        let dir = temp_dir("game");
+        let mut harness = harness(&dir);
+        harness.get_by_label("Ayarlar").click();
+        harness.run_steps(3);
+        assert!(!harness.state().form.game_mode);
+        // The row's label and its switch carry the same name: the switch comes last.
+        let switch = harness.query_all_by_label_contains("Oyunlarda ve tam ekranda geçiş").last();
+        switch.expect("the game-mode row").click();
+        harness.run_steps(2);
+        assert!(harness.state().form.game_mode);
+        harness.get_by_label_contains("0,8 sn");
+
+        harness.state_mut().save_settings();
+        let saved = config::load(&dir.join(SETTINGS_FILE)).unwrap();
+        assert_eq!(saved.game_mode, Some(true));
+        let flags = RunFlags { dry_run: true, ..RunFlags::default() };
+        assert!(config::resolve(saved, flags).unwrap().game_mode);
         let _ = std::fs::remove_dir_all(dir);
     }
 
