@@ -38,9 +38,8 @@ const GAME_NOTE: &str = "Bir oyun imleci kilitlese de kenara yaklaşık 0,8 sn i
     bilgisayara geçer. Kamerayı çevirirken yanlışlıkla geçebilir; \
     Ctrl+Alt+Shift+Esc her zaman geri getirir.";
 /// Under the login-screen switch: what it is for and what it needs.
-const LOGIN_NOTE: &str = "Kilit ve oturum açma ekranında diğer bilgisayarın klavyesiyle şifre \
-    yazabilmek için. Bir kez yönetici şifresi ister. FileVault açıksa bilgisayar ilk açılışta \
-    çalışmaz.";
+const LOGIN_NOTE: &str = "Kilit ve oturum açma ekranında şifreyi diğer bilgisayardan \
+    yazmak için. Bir kez yönetici şifresi ister. FileVault açıksa ilk açılışta çalışmaz.";
 /// The window does not resize by hand: one of two fixed sizes, see [`window`].
 /// How long "packet sent" stays under the status after waking the other computer.
 const WAKE_NOTE: Duration = Duration::from_secs(6);
