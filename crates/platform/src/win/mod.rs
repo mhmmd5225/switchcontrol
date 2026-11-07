@@ -9,7 +9,7 @@ pub use inject::Injector;
 pub use screen::{cursor_image, cursor_pos, monitors, virtual_desktop};
 
 use windows::Win32::UI::HiDpi::{
-    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForSystem, SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, MAPVK_VK_TO_VSC_EX, MapVirtualKeyW,
@@ -23,6 +23,12 @@ pub const INJECT_MARKER: usize = 0x5343_4B56;
 pub fn init() {
     // Fails harmlessly if awareness was already set (e.g. by a manifest).
     let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+}
+
+/// Display scaling of the primary screen (1.0 = 100 %, 1.5 = 150 %).
+pub fn screen_scale() -> f32 {
+    init();
+    (unsafe { GetDpiForSystem() }.max(96) as f32) / 96.0
 }
 
 /// macOS-only concept; Windows hooks always see the keyboard.

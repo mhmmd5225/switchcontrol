@@ -85,6 +85,10 @@ pub struct FileConfig {
     pub wake_mac: Option<String>,
     /// Wake the other computer whenever sharing starts, e.g. at login (window only).
     pub wake_on_start: Option<bool>,
+    /// Start sharing as soon as the window program opens (window only).
+    pub start_on_launch: Option<bool>,
+    /// Window size: "auto", "compact" or "standard" (window only).
+    pub window_size: Option<String>,
     pub data_dir: Option<PathBuf>,
 }
 
@@ -163,6 +167,8 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
         edge_bar: file.edge_bar,
         wake_mac: file.wake_mac,
         wake_on_start: file.wake_on_start,
+        start_on_launch: file.start_on_launch,
+        window_size: file.window_size,
         data_dir: cli.data_dir.or(file.data_dir),
     };
     resolve(merged, flags)

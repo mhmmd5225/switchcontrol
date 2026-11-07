@@ -26,6 +26,7 @@ mod theme;
 mod tls;
 mod tray;
 mod wake;
+mod window;
 
 use std::process::ExitCode;
 use std::sync::{Arc, mpsc};

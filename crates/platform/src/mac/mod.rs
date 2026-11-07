@@ -38,6 +38,11 @@ pub fn permissions() -> Permissions {
     }
 }
 
+/// Monitor sizes are already in points, so there is nothing to scale.
+pub fn screen_scale() -> f32 {
+    1.0
+}
+
 /// While a password field has focus, macOS hides keystrokes from event taps.
 pub fn secure_input_active() -> bool {
     unsafe { ffi::IsSecureEventInputEnabled() != 0 }

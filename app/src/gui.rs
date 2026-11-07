@@ -26,14 +26,14 @@ use crate::identity::{self, Fingerprint, TrustStore};
 use crate::net::{self, PinSource, Waiting};
 use crate::pairing::normalize_pin;
 use crate::power;
-use crate::theme::{self, Kind, Link, Palette};
+use crate::theme::{self, Density, Kind, Link, Palette};
 use crate::tray::{PowerMenu, Tray, TrayCommand};
 use crate::wake;
+use crate::window::{self, Pref};
 
 const SETTINGS_FILE: &str = "settings.toml";
 const LOG_LINES: usize = 500;
-/// The window does not resize: both pages are laid out to fit it.
-const WINDOW_SIZE: (f32, f32) = (460.0, 920.0);
+/// The window does not resize by hand: one of two fixed sizes, see [`window`].
 /// How long "packet sent" stays under the status after waking the other computer.
 const WAKE_NOTE: Duration = Duration::from_secs(6);
 /// Waking at start is repeated this often, a few times, until connected:
@@ -48,10 +48,14 @@ const HOTKEY: &str =
 /// Opens the window. `at_login`: started by [`autostart`], so hide in the
 /// tray and start sharing right away.
 pub fn run(at_login: bool) -> Result<(), String> {
+    let data_dir = identity::default_dir();
+    let screen_h = window::primary_screen().1;
+    let pref = saved_window_pref(&data_dir);
+    let (width, height) = window::size(window::density(pref, screen_h), screen_h);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("SwitchControl")
-            .with_inner_size([WINDOW_SIZE.0, WINDOW_SIZE.1])
+            .with_inner_size([width, height])
             .with_resizable(false)
             .with_maximize_button(false)
             .with_icon(Arc::new(
@@ -60,7 +64,6 @@ pub fn run(at_login: bool) -> Result<(), String> {
             )),
         ..Default::default()
     };
-    let data_dir = identity::default_dir();
     // Other systems have no capture backend; the window still works for trying it out.
     let dry_run = cfg!(not(any(windows, target_os = "macos")));
     eframe::run_native(
@@ -72,9 +75,7 @@ pub fn run(at_login: bool) -> Result<(), String> {
                 Ok(tray) => app.tray = Some(tray),
                 Err(e) => app.push_log(format!("no tray icon: {e}")),
             }
-            if at_login {
-                app.launched_at_login();
-            }
+            app.launched(at_login);
             Ok(Box::new(app))
         }),
     )
@@ -92,6 +93,7 @@ enum Mode {
 enum Page {
     Connection,
     Settings,
+    App,
 }
 
 /// The editable settings.
@@ -112,6 +114,9 @@ struct Form {
     wake_mac: String,
     /// Wake the other computer whenever sharing starts.
     wake_on_start: bool,
+    /// Start sharing as soon as the program opens.
+    start_on_launch: bool,
+    window: Pref,
     /// Kept from the file; the window has no field for it.
     listen: Option<String>,
 }
@@ -139,6 +144,8 @@ impl Form {
             announce: file.announce.unwrap_or(true),
             wake_mac: file.wake_mac.unwrap_or_default(),
             wake_on_start: file.wake_on_start.unwrap_or(false),
+            start_on_launch: file.start_on_launch.unwrap_or(true),
+            window: Pref::parse(file.window_size.as_deref()),
             listen: file.listen,
         }
     }
@@ -159,6 +166,8 @@ impl Form {
             announce: Some(self.announce),
             wake_mac: Some(self.wake_mac.trim().to_string()).filter(|m| !m.is_empty()),
             wake_on_start: Some(self.wake_on_start),
+            start_on_launch: Some(self.start_on_launch),
+            window_size: Some(self.window.as_str().to_string()),
             data_dir: None,
         }
     }
@@ -224,6 +233,8 @@ pub struct GuiApp {
     autostart: bool,
     /// Asking whether to really shut the other computer down.
     confirm_shutdown: bool,
+    /// How much room the widgets take, from the screen and the user's choice.
+    density: Density,
     /// When the last Wake-on-LAN packet went out.
     woken_at: Option<Instant>,
     /// Waking at start: when to send again, and how many more times.
@@ -234,10 +245,14 @@ impl GuiApp {
     pub fn new(ctx: egui::Context, data_dir: PathBuf, dry_run: bool) -> GuiApp {
         theme::install(&ctx);
         let file = config::load(&data_dir.join(SETTINGS_FILE)).unwrap_or_default();
+        let form = Form::from_file(file);
+        let density = window::density(form.window, window::primary_screen().1);
+        theme::set_density(&ctx, density);
         let (reports_tx, reports_rx) = mpsc::channel();
         GuiApp {
             ctx,
-            form: Form::from_file(file),
+            density,
+            form,
             page: Page::Connection,
             paired: paired_list(&data_dir),
             data_dir,
@@ -264,15 +279,22 @@ impl GuiApp {
         }
     }
 
-    /// Started at login: go to the tray and share with the saved settings.
-    fn launched_at_login(&mut self) {
-        self.hide_on_first_frame = self.tray.is_some();
-        if self.form.mode == Mode::Listen
-            || !self.form.address.trim().is_empty()
-            || !self.paired.is_empty()
-        {
+    /// The program just opened. Sharing starts right away with the saved
+    /// settings (unless switched off), so nothing needs pressing. Started at
+    /// login: it also goes to the tray.
+    fn launched(&mut self, at_login: bool) {
+        self.hide_on_first_frame = at_login && self.tray.is_some();
+        if (at_login || self.form.start_on_launch) && self.can_start_quietly() {
             self.start();
         }
+    }
+
+    /// Whether `start` would not need to ask the user anything first: waiting
+    /// for a connection, an address to connect to, or a paired computer to find.
+    fn can_start_quietly(&self) -> bool {
+        self.form.mode == Mode::Listen
+            || !self.form.address.trim().is_empty()
+            || !self.paired.is_empty()
     }
 
     /// Carries out what was picked from the tray icon, and keeps its status current.
@@ -475,6 +497,17 @@ impl GuiApp {
         self.save_settings();
     }
 
+    /// Switches between the two window sizes, now.
+    fn set_window_pref(&mut self, pref: Pref) {
+        self.form.window = pref;
+        let screen_h = window::primary_screen().1;
+        self.density = window::density(pref, screen_h);
+        theme::set_density(&self.ctx, self.density);
+        let (width, height) = window::size(self.density, screen_h);
+        self.ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(width, height)));
+        self.save_settings();
+    }
+
     fn save_settings(&mut self) {
         if let Err(e) = config::save(&self.data_dir.join(SETTINGS_FILE), &self.form.to_file()) {
             self.push_log(format!("could not save settings: {e}"));
@@ -589,7 +622,8 @@ impl GuiApp {
         let (_, _, link) = self.status();
         let dry_run = self.dry_run && self.running.is_some();
         ui.horizontal(|ui| {
-            ui.label(theme::semibold("SwitchControl").size(20.0));
+            let title = theme::Metrics::of(ui).font_title;
+            ui.label(theme::semibold("SwitchControl").size(title));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 theme::status_pill(ui, link);
                 if dry_run {
@@ -601,7 +635,7 @@ impl GuiApp {
         theme::tabs(
             ui,
             &mut self.page,
-            &[(Page::Connection, "Bağlantı"), (Page::Settings, "Ayarlar")],
+            &[(Page::Connection, "Bağlantı"), (Page::Settings, "Ayarlar"), (Page::App, "Uygulama")],
         );
     }
 
@@ -615,7 +649,7 @@ impl GuiApp {
             let p = Palette::of(ui);
             theme::monitors(ui, self.form.side == Side::Left, link, self.form.name.trim(), &peer);
             ui.vertical_centered(|ui| {
-                ui.label(theme::semibold(title).size(16.0));
+                ui.label(theme::semibold(title).size(theme::Metrics::of(ui).font_head));
                 if !detail.is_empty() {
                     ui.label(RichText::new(detail).color(p.muted));
                 }
@@ -641,7 +675,7 @@ impl GuiApp {
             if actions.is_empty() {
                 return;
             }
-            ui.add_space(6.0);
+            ui.add_space(theme::Metrics::of(ui).gap);
             centered(ui, |ui| {
                 ui.label(RichText::new(format!("{peer}:")).color(p.muted));
                 for (power, label, kind) in actions {
@@ -651,7 +685,7 @@ impl GuiApp {
                 }
             });
         } else if self.wake_mac().is_some() {
-            ui.add_space(6.0);
+            ui.add_space(theme::Metrics::of(ui).gap);
             centered(ui, |ui| {
                 if theme::button(ui, "Diğer bilgisayarı uyandır", Kind::Secondary).clicked() {
                     self.wake();
@@ -683,7 +717,7 @@ impl GuiApp {
             _ => return,
         };
         let p = Palette::of(ui);
-        ui.add_space(8.0);
+        ui.add_space(theme::Metrics::of(ui).gap);
         let mut answer = None;
         theme::notice(ui, p.red, |ui| {
             ui.label(theme::semibold(format!("{peer} kapatılsın mı?")));
@@ -717,7 +751,7 @@ impl GuiApp {
         if self.perms.all_granted() {
             return;
         }
-        ui.add_space(8.0);
+        ui.add_space(theme::Metrics::of(ui).gap);
         let p = Palette::of(ui);
         theme::notice(ui, p.amber, |ui| {
             ui.label(theme::semibold("macOS izinleri gerekli"));
@@ -755,14 +789,14 @@ impl GuiApp {
     fn pairing_ui(&mut self, ui: &mut egui::Ui) {
         let p = Palette::of(ui);
         if let Some(pin) = &self.view.show_pin {
-            ui.add_space(8.0);
+            ui.add_space(theme::Metrics::of(ui).gap);
             theme::notice(ui, p.accent, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.label(theme::semibold("Eşleştirme isteği"));
                     ui.label(
                         RichText::new(format!("{} {}", &pin[..3], &pin[3..]))
                             .monospace()
-                            .size(36.0)
+                            .size(theme::Metrics::of(ui).font_pin)
                             .color(p.accent),
                     );
                     ui.label(RichText::new("Bu PIN'i diğer bilgisayara girin.").color(p.muted));
@@ -770,7 +804,7 @@ impl GuiApp {
             });
         }
         if let Some(addr) = self.view.ask_pin {
-            ui.add_space(8.0);
+            ui.add_space(theme::Metrics::of(ui).gap);
             let mut answer = None;
             theme::notice(ui, p.accent, |ui| {
                 ui.label(theme::semibold(format!("{} ile eşleştirme", addr.ip())));
@@ -819,7 +853,7 @@ impl GuiApp {
         let local_ip = self.local_ip;
         let paired = &self.paired;
         let form = &mut self.form;
-        ui.add_space(8.0);
+        ui.add_space(theme::Metrics::of(ui).gap);
         theme::card(ui, |ui| {
             ui.add_enabled_ui(enabled, |ui| {
                 theme::row(ui, "Rol", |ui| {
@@ -959,7 +993,29 @@ impl GuiApp {
                 );
             }
             theme::divider(ui);
-            self.wake_row_ui(ui);
+            let launch = "Açılınca bağlantıyı başlat";
+            let mut on = self.form.start_on_launch;
+            let (_, switch) = theme::row(ui, launch, |ui| theme::switch(ui, &mut on, launch));
+            if switch.changed() {
+                self.form.start_on_launch = on;
+                self.save_settings();
+            }
+            theme::divider(ui);
+            let mut pref = self.form.window;
+            theme::row(ui, "Pencere boyutu", |ui| {
+                theme::segmented(
+                    ui,
+                    &mut pref,
+                    &[
+                        (Pref::Auto, "Otomatik"),
+                        (Pref::Compact, "Kompakt"),
+                        (Pref::Standard, "Standart"),
+                    ],
+                )
+            });
+            if pref != self.form.window {
+                self.set_window_pref(pref);
+            }
             theme::divider(ui);
             let mut forget = false;
             theme::row(ui, &format!("Eşleşmiş bilgisayar: {}", self.paired.len()), |ui| {
@@ -979,6 +1035,8 @@ impl GuiApp {
                 self.paired = paired_list(&self.data_dir);
             }
         });
+        theme::section(ui, "Uyandırma");
+        theme::card(ui, |ui| self.wake_row_ui(ui));
     }
 
     /// The other computer's network card, for waking it.
@@ -1019,17 +1077,17 @@ impl GuiApp {
     }
 
     fn log_ui(&self, ui: &mut egui::Ui) {
-        ui.add_space(10.0);
+        ui.add_space(theme::Metrics::of(ui).section_gap);
         theme::card(ui, |ui| {
             egui::CollapsingHeader::new("Günlük").default_open(false).show(ui, |ui| {
-                egui::ScrollArea::vertical().max_height(180.0).stick_to_bottom(true).show(
-                    ui,
-                    |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(theme::Metrics::of(ui).log_h)
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
                         for line in &self.view.log {
                             ui.label(RichText::new(line).monospace().small());
                         }
-                    },
-                );
+                    });
             });
         });
     }
@@ -1063,16 +1121,23 @@ impl eframe::App for GuiApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         theme::paint_backdrop(ui);
+        let m = theme::Metrics::of(ui);
         egui::Panel::bottom("footer")
             .show_separator_line(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(egui::Color32::from_black_alpha(70))
-                    .inner_margin(egui::Margin { left: 16, right: 16, top: 12, bottom: 10 }),
-            )
+            .frame(egui::Frame::new().fill(egui::Color32::from_black_alpha(70)).inner_margin(
+                egui::Margin {
+                    left: m.page_pad.0,
+                    right: m.page_pad.0,
+                    top: m.page_pad.1 - 2,
+                    bottom: m.page_pad.1 - 4,
+                },
+            ))
             .show(ui, |ui| self.footer_ui(ui));
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 14)))
+            .frame(
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(m.page_pad.0, m.page_pad.1)),
+            )
             .show(ui, |ui| {
                 self.header_ui(ui);
                 // Needed whichever page is open: a PIN question must not hide.
@@ -1086,8 +1151,8 @@ impl eframe::App for GuiApp {
                     .page
                 {
                     Page::Connection => self.connection_ui(ui),
-                    Page::Settings => {
-                        self.behavior_ui(ui);
+                    Page::Settings => self.behavior_ui(ui),
+                    Page::App => {
                         self.app_ui(ui);
                         self.log_ui(ui);
                     }
@@ -1171,6 +1236,12 @@ fn found_ui(ui: &mut egui::Ui, address: &mut String, paired: &[Fingerprint]) {
             ui.label(RichText::new(computer.addr.ip().to_string()).small().weak());
         });
     }
+}
+
+/// The window size the user chose last time, before the window exists.
+fn saved_window_pref(data_dir: &Path) -> Pref {
+    let file = config::load(&data_dir.join(SETTINGS_FILE)).unwrap_or_default();
+    Pref::parse(file.window_size.as_deref())
 }
 
 fn paired_list(dir: &Path) -> Vec<Fingerprint> {
@@ -1276,6 +1347,41 @@ mod tests {
         assert!(harness.query_by_label("İmleç hızı").is_none());
     }
 
+    /// Every page fits its window without scrolling, in both sizes: the last
+    /// thing on each page ends above the button at the bottom.
+    #[test]
+    fn pages_fit_both_window_sizes() {
+        for pref in [Pref::Standard, Pref::Compact] {
+            let dir = temp_dir(&format!("fit-{}", pref.as_str()));
+            let density = window::density(pref, 0.0);
+            let (width, height) = window::size(density, 1080.0);
+            let app_dir = dir.clone();
+            let mut harness =
+                Harness::builder().with_size([width, height]).build_eframe(move |cc| {
+                    let mut app = GuiApp::new(cc.egui_ctx.clone(), app_dir, true);
+                    app.set_window_pref(pref);
+                    app
+                });
+            harness.step();
+            let bottom = harness.get_by_label("Başlat").rect().top();
+            for (page, tab, last) in [
+                (Page::Connection, "Bağlantı", "Bu bilgisayarın adı"),
+                (Page::Settings, "Ayarlar", "Pano paylaşımı"),
+                (Page::App, "Uygulama", "Günlük"),
+            ] {
+                harness.get_by_label(tab).click();
+                harness.run_steps(3);
+                assert_eq!(harness.state().page, page);
+                let end = harness
+                    .query_all_by_label(last)
+                    .map(|node| node.rect().bottom())
+                    .fold(f32::MIN, f32::max);
+                assert!(end <= bottom, "{pref:?} {tab}: {last} ends at {end}, button at {bottom}");
+            }
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
     /// Hovering a button changes its colour only: its size and place stay put.
     #[test]
     fn hover_does_not_move_widgets() {
@@ -1370,6 +1476,38 @@ mod tests {
         assert!(harness.state().wake_retry.is_none());
         let saved = config::load(&dir.join(SETTINGS_FILE)).unwrap();
         assert_eq!(saved.wake_on_start, Some(true));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Opening the program starts sharing by itself, unless switched off.
+    #[test]
+    fn opening_starts_sharing() {
+        let dir = temp_dir("launch");
+        let mut harness = harness(&dir);
+        harness.state_mut().launched(false);
+        harness.step();
+        assert!(harness.state().running.is_some());
+        harness.get_by_label("Durdur");
+        harness.state_mut().stop();
+        harness.step();
+
+        harness.state_mut().form.start_on_launch = false;
+        harness.state_mut().launched(false);
+        harness.step();
+        assert!(harness.state().running.is_none());
+        // Started at login it shares whatever the setting says.
+        harness.state_mut().launched(true);
+        harness.step();
+        assert!(harness.state().running.is_some());
+        harness.state_mut().stop();
+
+        // Connecting needs an address or a paired computer: nothing to ask at launch.
+        harness.state_mut().form.start_on_launch = true;
+        harness.state_mut().form.mode = Mode::Connect;
+        harness.state_mut().form.address.clear();
+        harness.state_mut().launched(false);
+        assert!(harness.state().running.is_none());
+        assert!(harness.state().error.is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 

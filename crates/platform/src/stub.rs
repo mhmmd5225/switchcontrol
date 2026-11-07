@@ -21,6 +21,10 @@ pub fn permissions() -> Permissions {
     Permissions { listen: true, post: true }
 }
 
+pub fn screen_scale() -> f32 {
+    1.0
+}
+
 pub fn monitors() -> Vec<Monitor> {
     vec![Monitor {
         name: "virtual".into(),

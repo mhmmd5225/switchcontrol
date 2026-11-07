@@ -5,6 +5,9 @@
 //! Every clickable widget here takes a fixed size and paints itself, so
 //! hovering or pressing only changes colours: nothing moves, grows or gets a
 //! new outline.
+//!
+//! Sizes and spacing are design tokens: [`Metrics`], one set per [`Density`].
+//! The same widgets are drawn roomy on a big screen and tight on a small one.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -64,6 +67,155 @@ pub fn install(ctx: &egui::Context) {
     let p = Palette::glass();
     ctx.style_mut_of(Theme::Light, |style| apply(style, &p));
     ctx.style_mut_of(Theme::Dark, |style| apply(style, &p));
+    set_density(ctx, Density::Standard);
+}
+
+/// How much room the widgets take. Chosen from the screen's size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Density {
+    #[default]
+    Standard,
+    Compact,
+}
+
+/// The design tokens of one [`Density`]: every size and gap the widgets use.
+#[derive(Debug, Clone, Copy)]
+pub struct Metrics {
+    /// Space between neighbouring widgets.
+    pub gap: f32,
+    /// Space above a section title.
+    pub section_gap: f32,
+    /// Space between the window edge and its content: horizontal, vertical.
+    pub page_pad: (i8, i8),
+    /// Space inside a card: horizontal, vertical.
+    pub card_pad: (i8, i8),
+    /// One line of a card.
+    pub row_h: f32,
+    /// A button, a text field.
+    pub control_h: f32,
+    /// The big button at the bottom, and the PIN field.
+    pub big_h: f32,
+    pub tab_h: f32,
+    pub pill_h: f32,
+    pub switch: Vec2,
+    /// A track item of the segmented control.
+    pub segment_h: f32,
+    pub font_body: f32,
+    pub font_small: f32,
+    pub font_button: f32,
+    /// A card's headline and the window title.
+    pub font_head: f32,
+    pub font_title: f32,
+    pub font_pin: f32,
+    /// The two-monitor picture.
+    pub screen: Vec2,
+    pub screen_gap: f32,
+    pub label_dy: f32,
+    pub caption_dy: f32,
+    pub slider_width: f32,
+    /// Most the log shows before scrolling.
+    pub log_h: f32,
+}
+
+impl Density {
+    pub fn metrics(self) -> Metrics {
+        match self {
+            Density::Standard => Metrics {
+                gap: 8.0,
+                section_gap: 10.0,
+                page_pad: (16, 14),
+                card_pad: (16, 12),
+                row_h: 32.0,
+                control_h: 30.0,
+                big_h: 44.0,
+                tab_h: 36.0,
+                pill_h: 26.0,
+                switch: Vec2::new(40.0, 24.0),
+                segment_h: 26.0,
+                font_body: 14.0,
+                font_small: 11.5,
+                font_button: 13.5,
+                font_head: 16.0,
+                font_title: 20.0,
+                font_pin: 36.0,
+                screen: Vec2::new(108.0, 66.0),
+                screen_gap: 92.0,
+                label_dy: 20.0,
+                caption_dy: 37.0,
+                slider_width: 150.0,
+                log_h: 180.0,
+            },
+            Density::Compact => Metrics {
+                gap: 5.0,
+                section_gap: 6.0,
+                page_pad: (12, 10),
+                card_pad: (12, 8),
+                row_h: 28.0,
+                control_h: 26.0,
+                big_h: 38.0,
+                tab_h: 30.0,
+                pill_h: 22.0,
+                switch: Vec2::new(36.0, 22.0),
+                segment_h: 22.0,
+                font_body: 13.0,
+                font_small: 11.0,
+                font_button: 12.5,
+                font_head: 15.0,
+                font_title: 18.0,
+                font_pin: 30.0,
+                screen: Vec2::new(64.0, 40.0),
+                screen_gap: 56.0,
+                label_dy: 14.0,
+                caption_dy: 28.0,
+                slider_width: 120.0,
+                log_h: 110.0,
+            },
+        }
+    }
+}
+
+impl Metrics {
+    /// The tokens in force for this window.
+    pub fn of(ui: &egui::Ui) -> Metrics {
+        let density = ui.ctx().data(|d| d.get_temp::<Density>(density_id())).unwrap_or_default();
+        density.metrics()
+    }
+
+    /// Height of the two-monitor picture.
+    fn monitors_h(&self) -> f32 {
+        let top = if self.screen.y > 50.0 { 6.0 } else { 4.0 };
+        top + self.screen.y + self.caption_dy + 14.0 + top + 3.0
+    }
+}
+
+fn density_id() -> Id {
+    Id::NULL.with("switchcontrol-density")
+}
+
+/// Switches every widget, and the text styles egui draws itself, to `density`.
+pub fn set_density(ctx: &egui::Context, density: Density) {
+    ctx.data_mut(|d| d.insert_temp(density_id(), density));
+    let m = density.metrics();
+    for theme in [Theme::Light, Theme::Dark] {
+        ctx.style_mut_of(theme, |style| apply_metrics(style, &m));
+    }
+    ctx.request_repaint();
+}
+
+fn apply_metrics(style: &mut egui::Style, m: &Metrics) {
+    use egui::FontFamily::{Monospace, Proportional};
+    style.text_styles = [
+        (TextStyle::Heading, FontId::new(m.font_title, Proportional)),
+        (TextStyle::Body, FontId::new(m.font_body, Proportional)),
+        (TextStyle::Button, FontId::new(m.font_body, Proportional)),
+        (TextStyle::Small, FontId::new(m.font_small, Proportional)),
+        (TextStyle::Monospace, FontId::new(m.font_body - 1.0, Monospace)),
+    ]
+    .into();
+    style.spacing.item_spacing = Vec2::new(m.gap, m.gap);
+    style.spacing.button_padding = Vec2::new(12.0, 6.0);
+    style.spacing.interact_size.y = m.control_h;
+    style.spacing.slider_width = m.slider_width;
 }
 
 /// Text in the semibold weight.
@@ -118,20 +270,6 @@ impl Palette {
 }
 
 fn apply(style: &mut egui::Style, p: &Palette) {
-    use egui::FontFamily::{Monospace, Proportional};
-    style.text_styles = [
-        (TextStyle::Heading, FontId::new(20.0, Proportional)),
-        (TextStyle::Body, FontId::new(14.0, Proportional)),
-        (TextStyle::Button, FontId::new(14.0, Proportional)),
-        (TextStyle::Small, FontId::new(11.5, Proportional)),
-        (TextStyle::Monospace, FontId::new(13.0, Monospace)),
-    ]
-    .into();
-    style.spacing.item_spacing = Vec2::new(8.0, 8.0);
-    style.spacing.button_padding = Vec2::new(12.0, 6.0);
-    style.spacing.interact_size.y = 30.0;
-    style.spacing.slider_width = 150.0;
-
     let v = &mut style.visuals;
     v.dark_mode = true;
     v.override_text_color = Some(p.text);
@@ -290,11 +428,12 @@ pub fn paint_backdrop(ui: &egui::Ui) {
 /// A translucent glass panel holding one group of controls.
 pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let p = Palette::of(ui);
+    let m = Metrics::of(ui);
     let out = egui::Frame::new()
         .fill(p.card)
         .stroke(Stroke::new(1.0, p.border))
         .corner_radius(CornerRadius::same(14))
-        .inner_margin(Margin::symmetric(16, 12))
+        .inner_margin(Margin::symmetric(m.card_pad.0, m.card_pad.1))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(ui)
@@ -311,11 +450,17 @@ pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
 /// A card with a coloured edge and strip, for things that need attention.
 pub fn notice<R>(ui: &mut egui::Ui, accent: Color32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let p = Palette::of(ui);
+    let m = Metrics::of(ui);
     let out = egui::Frame::new()
         .fill(mix(Color32::from_rgb(0x14, 0x14, 0x24), accent, 0.10))
         .stroke(Stroke::new(1.0, with_alpha(accent, 0.55)))
         .corner_radius(CornerRadius::same(14))
-        .inner_margin(Margin { left: 20, right: 16, top: 12, bottom: 12 })
+        .inner_margin(Margin {
+            left: m.card_pad.0 + 4,
+            right: m.card_pad.0,
+            top: m.card_pad.1,
+            bottom: m.card_pad.1,
+        })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(ui)
@@ -334,7 +479,7 @@ pub fn notice<R>(ui: &mut egui::Ui, accent: Color32, add: impl FnOnce(&mut egui:
 
 /// The small muted title above a card.
 pub fn section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(10.0);
+    ui.add_space(Metrics::of(ui).section_gap);
     ui.horizontal(|ui| {
         ui.add_space(4.0);
         ui.label(semibold(title.to_uppercase()).size(11.0).color(Palette::of(ui).muted));
@@ -348,8 +493,9 @@ pub fn row<R>(
     label: &str,
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> (Response, R) {
+    let row_h = Metrics::of(ui).row_h;
     ui.horizontal(|ui| {
-        ui.set_min_height(32.0);
+        ui.set_min_height(row_h);
         let label = ui.label(label);
         let inner = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), add).inner;
         (label, inner)
@@ -379,13 +525,15 @@ pub enum Kind {
 
 /// A button as wide as its text.
 pub fn button(ui: &mut egui::Ui, label: &str, kind: Kind) -> Response {
-    let width = text_galley(ui, semibold(label).size(13.5)).size().x + 28.0;
-    draw_button(ui, Vec2::new(width.max(64.0), 30.0), label, kind, 13.5, 9)
+    let m = Metrics::of(ui);
+    let width = text_galley(ui, semibold(label).size(m.font_button)).size().x + 28.0;
+    draw_button(ui, Vec2::new(width.max(64.0), m.control_h), label, kind, m.font_button, 9)
 }
 
 /// The big button at the bottom of the window.
 pub fn big_button(ui: &mut egui::Ui, label: &str, kind: Kind) -> Response {
-    draw_button(ui, Vec2::new(ui.available_width(), 44.0), label, kind, 15.0, 12)
+    let m = Metrics::of(ui);
+    draw_button(ui, Vec2::new(ui.available_width(), m.big_h), label, kind, m.font_button + 1.5, 12)
 }
 
 fn draw_button(
@@ -457,11 +605,13 @@ pub fn segmented<T: PartialEq + Copy>(
 ) -> Response {
     let p = Palette::of(ui);
     let enabled = ui.is_enabled();
-    let (inset, item_h, gap) = (3.0, 26.0, 2.0);
+    let m = Metrics::of(ui);
+    let (inset, item_h, gap) = (3.0, m.segment_h, 2.0);
+    let font = m.font_button - 0.5;
     // Measured in the bold weight, so picking another option never resizes the track.
     let widths: Vec<f32> = options
         .iter()
-        .map(|&(_, label)| text_galley(ui, semibold(label).size(13.0)).size().x + 22.0)
+        .map(|&(_, label)| text_galley(ui, semibold(label).size(font)).size().x + 22.0)
         .collect();
     let total =
         widths.iter().sum::<f32>() + gap * options.len().saturating_sub(1) as f32 + inset * 2.0;
@@ -501,7 +651,7 @@ pub fn segmented<T: PartialEq + Copy>(
         }
         let hover = anim(ui, item.id.with("hover"), enabled && item.hovered());
         let color = if selected { Color32::WHITE } else { mix(p.muted, p.text, hover) };
-        let galley = text_galley(ui, semibold(label).size(13.0).color(color));
+        let galley = text_galley(ui, semibold(label).size(font).color(color));
         painter.galley(rects[i].center() - galley.size() / 2.0, galley, color);
         if item.clicked() && !selected {
             changed = Some(option);
@@ -517,7 +667,8 @@ pub fn segmented<T: PartialEq + Copy>(
 /// Page tabs across the width: a coloured line slides under the open one.
 pub fn tabs<T: PartialEq + Copy>(ui: &mut egui::Ui, value: &mut T, options: &[(T, &str)]) {
     let p = Palette::of(ui);
-    let height = 36.0;
+    let m = Metrics::of(ui);
+    let height = m.tab_h;
     let (rect, response) =
         ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::hover());
     let id = response.id;
@@ -542,7 +693,7 @@ pub fn tabs<T: PartialEq + Copy>(ui: &mut egui::Ui, value: &mut T, options: &[(T
         let hover = anim(ui, item.id.with("hover"), item.hovered());
         let color = if selected { p.text } else { mix(p.muted, p.text, hover) };
         let text = if selected { semibold(label) } else { RichText::new(label) };
-        let galley = text_galley(ui, text.size(14.0).color(color));
+        let galley = text_galley(ui, text.size(m.font_body).color(color));
         painter.galley(item_rect.center() - galley.size() / 2.0, galley, color);
         if selected {
             let line = Rect::from_min_max(
@@ -569,7 +720,7 @@ pub fn tabs<T: PartialEq + Copy>(ui: &mut egui::Ui, value: &mut T, options: &[(T
 /// An on/off switch.
 pub fn switch(ui: &mut egui::Ui, on: &mut bool, label: &str) -> Response {
     let p = Palette::of(ui);
-    let size = Vec2::new(40.0, 24.0);
+    let size = Metrics::of(ui).switch;
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
     if response.clicked() {
         *on = !*on;
@@ -584,7 +735,8 @@ pub fn switch(ui: &mut egui::Ui, on: &mut bool, label: &str) -> Response {
         let t = ui.ctx().animate_bool_responsive(response.id, *on);
         let hover = anim(ui, response.id.with("hover"), enabled && response.hovered());
         let painter = ui.painter().clone();
-        let radius = CornerRadius::same(12);
+        let radius = CornerRadius::same((size.y / 2.0) as u8);
+        let knob = size.y / 2.0 - 2.5;
         let off = mix(p.field_hover, Color32::WHITE, 0.06 * hover);
         painter.rect_filled(rect, radius, off);
         if t > 0.0 {
@@ -593,16 +745,16 @@ pub fn switch(ui: &mut egui::Ui, on: &mut bool, label: &str) -> Response {
             let on_b = mix(off, p.accent_end, t);
             gradient_rect(&painter, rect, radius, on_a, on_b);
         }
-        let x = egui::lerp((rect.left() + 12.0)..=(rect.right() - 12.0), t);
+        let x = egui::lerp((rect.left() + size.y / 2.0)..=(rect.right() - size.y / 2.0), t);
         let center = Pos2::new(x, rect.center().y);
         if hover > 0.0 {
             painter.circle_filled(
                 center,
-                9.5 + 3.5 * hover,
+                knob + 3.5 * hover,
                 Color32::from_white_alpha((40.0 * hover) as u8),
             );
         }
-        painter.circle_filled(center, 9.5, Color32::WHITE);
+        painter.circle_filled(center, knob, Color32::WHITE);
     }
     response
 }
@@ -617,7 +769,8 @@ pub fn text_field(
     style: TextStyle,
 ) -> Response {
     let p = Palette::of(ui);
-    let height = if style == TextStyle::Heading { 42.0 } else { 32.0 };
+    let m = Metrics::of(ui);
+    let height = if style == TextStyle::Heading { m.big_h - 2.0 } else { m.control_h + 2.0 };
     let (rect, frame) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     let radius = CornerRadius::same(9);
     let hover = anim(ui, frame.id.with("hover"), ui.rect_contains_pointer(rect));
@@ -669,14 +822,16 @@ pub fn status_pill(ui: &mut egui::Ui, link: Link) {
         Link::Connected => ("Bağlı", p.green),
         Link::Remote => ("Kontrol karşıda", p.accent),
     };
-    let galley = text_galley(ui, semibold(text).size(12.0).color(color));
-    let size = Vec2::new(galley.size().x + 36.0, 26.0);
+    let m = Metrics::of(ui);
+    let galley = text_galley(ui, semibold(text).size(m.font_small + 0.5).color(color));
+    let size = Vec2::new(galley.size().x + 36.0, m.pill_h);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(13), with_alpha(color, 0.14));
+    let round = (m.pill_h / 2.0) as u8;
+    painter.rect_filled(rect, CornerRadius::same(round), with_alpha(color, 0.14));
     painter.rect_stroke(
         rect,
-        CornerRadius::same(13),
+        CornerRadius::same(round),
         Stroke::new(1.0, with_alpha(color, 0.35)),
         StrokeKind::Inside,
     );
@@ -702,16 +857,17 @@ pub fn status_pill(ui: &mut egui::Ui, link: Link) {
 /// the link between them.
 pub fn monitors(ui: &mut egui::Ui, peer_left: bool, link: Link, this: &str, peer: &str) {
     let p = Palette::of(ui);
-    let height = 132.0;
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::hover());
+    let m = Metrics::of(ui);
+    let (rect, _) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), m.monitors_h()), Sense::hover());
     let painter = ui.painter_at(rect.expand(24.0).intersect(ui.clip_rect()));
     let time = ui.input(|i| i.time) as f32;
 
-    let screen = Vec2::new(108.0, 66.0);
-    let gap = 92.0;
+    let screen = m.screen;
+    let gap = m.screen_gap;
     let total = screen.x * 2.0 + gap;
     let left = rect.center().x - total / 2.0;
-    let top = rect.top() + 6.0;
+    let top = rect.top() + if screen.y > 50.0 { 6.0 } else { 4.0 };
     let left_rect = Rect::from_min_size(Pos2::new(left, top), screen);
     let right_rect = Rect::from_min_size(Pos2::new(left + screen.x + gap, top), screen);
     let (peer_rect, this_rect) =
@@ -778,27 +934,30 @@ pub fn monitors(ui: &mut egui::Ui, peer_left: bool, link: Link, this: &str, peer
             StrokeKind::Inside,
         );
         // Stand.
-        let neck =
-            Rect::from_center_size(Pos2::new(r.center().x, r.bottom() + 5.0), Vec2::new(10.0, 8.0));
+        let stand = if screen.y > 50.0 { 1.0 } else { 0.6 };
+        let neck = Rect::from_center_size(
+            Pos2::new(r.center().x, r.bottom() + 5.0 * stand),
+            Vec2::new(10.0 * stand, 8.0 * stand),
+        );
         painter.rect_filled(neck, 0.0, Color32::from_white_alpha(34));
         let foot = Rect::from_center_size(
-            Pos2::new(r.center().x, r.bottom() + 10.0),
-            Vec2::new(40.0, 3.0),
+            Pos2::new(r.center().x, r.bottom() + 10.0 * stand),
+            Vec2::new(40.0 * stand, 3.0),
         );
         painter.rect_filled(foot, CornerRadius::same(2), Color32::from_white_alpha(34));
 
         painter.text(
-            Pos2::new(r.center().x, r.bottom() + 20.0),
+            Pos2::new(r.center().x, r.bottom() + m.label_dy),
             egui::Align2::CENTER_TOP,
             name,
-            FontId::new(13.0, FontFamily::Name(SEMIBOLD_FAMILY.into())),
+            FontId::new(m.font_body - 1.0, FontFamily::Name(SEMIBOLD_FAMILY.into())),
             p.text,
         );
         painter.text(
-            Pos2::new(r.center().x, r.bottom() + 37.0),
+            Pos2::new(r.center().x, r.bottom() + m.caption_dy),
             egui::Align2::CENTER_TOP,
             caption,
-            FontId::proportional(11.0),
+            FontId::proportional(m.font_small - 0.5),
             p.muted,
         );
     }
