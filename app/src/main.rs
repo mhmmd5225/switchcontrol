@@ -19,9 +19,11 @@ mod engine;
 mod gui;
 mod identity;
 mod keyguard;
+mod loginwindow;
 mod net;
 mod pairing;
 mod power;
+mod service;
 mod theme;
 mod tls;
 mod tray;
@@ -55,6 +57,18 @@ fn main() -> ExitCode {
     {
         return wake(mac);
     }
+    match args.as_slice() {
+        [arg] if arg == loginwindow::SERVICE_ARG => return run_service(),
+        [arg] if arg == loginwindow::STATUS_ARG => return service_status(),
+        [arg] if arg == loginwindow::INSTALL_ARG => {
+            let exe = std::env::current_exe().unwrap_or_default();
+            return finish(loginwindow::install_as_root(&exe));
+        }
+        [arg] if arg == loginwindow::UNINSTALL_ARG => {
+            return finish(loginwindow::uninstall_as_root());
+        }
+        _ => {}
+    }
     let settings = match config::from_args(&args) {
         Ok(settings) => settings,
         Err(e) => {
@@ -69,7 +83,11 @@ fn main() -> ExitCode {
         Some(pin) => PinSource::Fixed(pin),
         None => PinSource::Console,
     };
+    run_terminal(settings, pin)
+}
 
+/// Runs the engine with its log on standard output until it ends.
+fn run_terminal(settings: config::Settings, pin: PinSource) -> ExitCode {
     let (tx, rx) = mpsc::channel();
     let engine = Engine::start(settings, pin, Arc::new(move |r| drop(tx.send(r))));
     let start = Instant::now();
@@ -93,6 +111,36 @@ fn main() -> ExitCode {
     }
     engine.wait();
     ExitCode::SUCCESS
+}
+
+/// The background copy at the macOS login screen: launchd runs it there.
+fn run_service() -> ExitCode {
+    match service::settings() {
+        // Nobody can type a PIN there: a computer must be paired already.
+        Ok(settings) => run_terminal(settings, PinSource::Ask(Box::new(|_| None))),
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn service_status() -> ExitCode {
+    let state = if loginwindow::is_installed() { "installed" } else { "not installed" };
+    println!("login-screen service: {state} ({})", loginwindow::PLIST);
+    println!("log: {}", loginwindow::LOG);
+    println!("shared data folder: {}", identity::SHARED_DIR);
+    ExitCode::SUCCESS
+}
+
+fn finish(result: Result<(), String>) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn wake(text: &str) -> ExitCode {

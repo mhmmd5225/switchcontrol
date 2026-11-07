@@ -62,6 +62,9 @@ pub struct NetContext {
     pub tls: TlsConfig,
     pub trust: Arc<Mutex<TrustStore>>,
     pub pin: PinSource,
+    /// Whether an unpaired computer may pair (with a PIN). Off in the service,
+    /// where nobody can read or type a PIN.
+    pub pairing: bool,
 }
 
 /// Where the connecting side gets the PIN when pairing.
@@ -302,6 +305,11 @@ fn session(
     };
     let pairing = !(trusted && peer_trusts);
     if pairing {
+        if !ctx.pairing {
+            return Err(io::Error::other(
+                "not paired yet: pair the two computers in the SwitchControl window first",
+            ));
+        }
         if !pairing_allowed {
             return Err(io::Error::other(
                 "too many wrong PINs; restart switchcontrol to pair again",

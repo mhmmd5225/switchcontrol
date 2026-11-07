@@ -123,7 +123,12 @@ fn run(
     rx: mpsc::Receiver<AppEvent>,
 ) -> Result<(), Box<dyn Error>> {
     let log = |text: String| report(Report::Log(text));
-    sys::init();
+    if settings.no_capture {
+        // The background service: nobody to answer a permission prompt.
+        log(format!("input permissions: {:?}", sys::permissions()));
+    } else {
+        sys::init();
+    }
     let screens: Vec<_> = sys::monitors().into_iter().map(|m| m.bounds).collect();
     if screens.is_empty() {
         return Err("no monitors found".into());
@@ -145,7 +150,8 @@ fn run(
     let mut io = if settings.dry_run {
         Io { capture: None, injector: None }
     } else {
-        Io { capture: Some(start_capture(tx.clone())?), injector: Some(Injector::new()) }
+        let capture = if settings.no_capture { None } else { Some(start_capture(tx.clone())?) };
+        Io { capture, injector: Some(Injector::new()) }
     };
 
     let data_dir = &settings.data_dir;
@@ -183,8 +189,12 @@ fn run(
         _ => None,
     };
 
-    let ctx =
-        NetContext { tls: TlsConfig::new(&identity)?, trust: Arc::new(Mutex::new(trust)), pin };
+    let ctx = NetContext {
+        tls: TlsConfig::new(&identity)?,
+        trust: Arc::new(Mutex::new(trust)),
+        pin,
+        pairing: !settings.no_pairing,
+    };
     let net = net::spawn(settings.net.clone(), node.hello(), ctx, tx.clone())
         .map_err(|e| format!("{:?}: {e}", settings.net))?;
     spawn_ticker(tx);

@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::identity;
 use crate::pairing::normalize_pin;
 
+/// The settings file in the data folder, in the same format `--config` reads.
+pub const SETTINGS_FILE: &str = "settings.toml";
+
 pub const USAGE: &str = "\
 usage: switchcontrol --side left|right [--listen ADDR | --connect ADDR] [options]
 
@@ -62,6 +65,10 @@ pub struct Settings {
     pub forget_peers: bool,
     pub dry_run: bool,
     pub verbose: bool,
+    /// Only receive: no keyboard or mouse capture (the background service).
+    pub no_capture: bool,
+    /// Never offer pairing: only computers already paired may connect.
+    pub no_pairing: bool,
 }
 
 /// The TOML file uses the long flag names, e.g. `side = "right"`.
@@ -216,6 +223,8 @@ pub fn resolve(config: FileConfig, flags: RunFlags) -> Result<Settings, String> 
         forget_peers: flags.forget_peers,
         dry_run: flags.dry_run,
         verbose: flags.verbose,
+        no_capture: false,
+        no_pairing: false,
     })
 }
 

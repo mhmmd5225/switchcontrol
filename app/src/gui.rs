@@ -18,11 +18,12 @@ use sc_platform::sys;
 use sc_proto::{Os, Power};
 
 use crate::autostart;
-use crate::config::{self, FileConfig, RunFlags};
+use crate::config::{self, FileConfig, RunFlags, SETTINGS_FILE};
 use crate::discovery::Listener;
 use crate::edgebar::{EdgeBar, Strip};
 use crate::engine::{Engine, LinkState, Report};
 use crate::identity::{self, Fingerprint, TrustStore};
+use crate::loginwindow;
 use crate::net::{self, PinSource, Waiting};
 use crate::pairing::normalize_pin;
 use crate::power;
@@ -31,8 +32,11 @@ use crate::tray::{PowerMenu, Tray, TrayCommand};
 use crate::wake;
 use crate::window::{self, Pref};
 
-const SETTINGS_FILE: &str = "settings.toml";
 const LOG_LINES: usize = 500;
+/// Under the login-screen switch: what it is for and what it needs.
+const LOGIN_NOTE: &str = "Kilit ve oturum açma ekranında diğer bilgisayarın klavyesiyle şifre \
+    yazabilmek için. Bir kez yönetici şifresi ister. FileVault açıksa bilgisayar ilk açılışta \
+    çalışmaz.";
 /// The window does not resize by hand: one of two fixed sizes, see [`window`].
 /// How long "packet sent" stays under the status after waking the other computer.
 const WAKE_NOTE: Duration = Duration::from_secs(6);
@@ -233,6 +237,12 @@ pub struct GuiApp {
     autostart: bool,
     /// Asking whether to really shut the other computer down.
     confirm_shutdown: bool,
+    /// macOS: whether the login-screen service is installed. `None` elsewhere.
+    login_agent: Option<bool>,
+    /// Installing or removing it, waiting for the administrator password.
+    login_job: Option<Receiver<Result<(), String>>>,
+    /// The program is not in the Applications folder, where the service looks for it.
+    login_misplaced: bool,
     /// How much room the widgets take, from the screen and the user's choice.
     density: Density,
     /// When the last Wake-on-LAN packet went out.
@@ -251,6 +261,10 @@ impl GuiApp {
         let (reports_tx, reports_rx) = mpsc::channel();
         GuiApp {
             ctx,
+            login_agent: loginwindow::supported().then(loginwindow::is_installed),
+            login_job: None,
+            login_misplaced: !std::env::current_exe()
+                .is_ok_and(|exe| loginwindow::in_applications(&exe)),
             density,
             form,
             page: Page::Connection,
@@ -497,6 +511,34 @@ impl GuiApp {
         self.save_settings();
     }
 
+    /// Installs or removes the login-screen service; macOS asks for the
+    /// administrator password meanwhile, so it runs on a thread of its own.
+    fn start_login_job(&mut self, install: bool) {
+        let (tx, rx) = mpsc::channel();
+        let ctx = self.ctx.clone();
+        std::thread::spawn(move || {
+            let result = if install { loginwindow::install() } else { loginwindow::uninstall() };
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+        self.login_job = Some(rx);
+    }
+
+    /// After the service is installed the window uses the folder it shares,
+    /// where the identity and the paired computers move over.
+    fn use_shared_data_dir(&mut self) {
+        let was_running = self.running.is_some();
+        if was_running {
+            self.stop();
+        }
+        self.data_dir = identity::default_dir();
+        self.paired = paired_list(&self.data_dir);
+        self.save_settings();
+        if was_running {
+            self.start();
+        }
+    }
+
     /// Switches between the two window sizes, now.
     fn set_window_pref(&mut self, pref: Pref) {
         self.form.window = pref;
@@ -567,6 +609,20 @@ impl GuiApp {
                     }
                     self.stop();
                 }
+            }
+        }
+        if let Some(result) = self.login_job.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.login_job = None;
+            self.login_agent = Some(loginwindow::is_installed());
+            match result {
+                Ok(()) if self.login_agent == Some(true) => {
+                    self.push_log("login-screen service installed".into());
+                    self.use_shared_data_dir();
+                }
+                Ok(()) => self.push_log("login-screen service removed".into()),
+                // Cancelling the password dialog is not worth an error.
+                Err(e) if e.contains("-128") => {}
+                Err(e) => self.error = Some(format!("Şifre ekranı hizmeti: {e}")),
             }
         }
         if self.perms_checked.elapsed() >= Duration::from_secs(1) {
@@ -972,6 +1028,40 @@ impl GuiApp {
         });
     }
 
+    /// macOS: the service that lets the other computer type the password.
+    fn login_screen_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(installed) = self.login_agent else { return };
+        let p = Palette::of(ui);
+        let busy = self.login_job.is_some();
+        let mut pressed = false;
+        theme::section(ui, "Şifre ekranı");
+        theme::card(ui, |ui| {
+            theme::row(ui, "Şifre ekranında çalış", |ui| {
+                let (text, kind) =
+                    if installed { ("Kaldır", Kind::Ghost) } else { ("Kur", Kind::Secondary) };
+                pressed =
+                    ui.add_enabled_ui(!busy, |ui| theme::button(ui, text, kind)).inner.clicked();
+                let (status, color) = match (busy, installed) {
+                    (true, _) => ("şifre bekleniyor", p.muted),
+                    (false, true) => ("kurulu", p.green),
+                    (false, false) => ("kurulu değil", p.muted),
+                };
+                ui.label(RichText::new(status).small().color(color));
+            });
+            ui.label(RichText::new(LOGIN_NOTE).small().weak());
+            if self.login_misplaced {
+                ui.label(
+                    RichText::new("Önce uygulamayı Uygulamalar klasörüne taşıyın.")
+                        .small()
+                        .color(p.amber),
+                );
+            }
+        });
+        if pressed {
+            self.start_login_job(!installed);
+        }
+    }
+
     fn app_ui(&mut self, ui: &mut egui::Ui) {
         let running = self.running.is_some();
         theme::section(ui, "Uygulama");
@@ -1151,7 +1241,10 @@ impl eframe::App for GuiApp {
                     .page
                 {
                     Page::Connection => self.connection_ui(ui),
-                    Page::Settings => self.behavior_ui(ui),
+                    Page::Settings => {
+                        self.behavior_ui(ui);
+                        self.login_screen_ui(ui);
+                    }
                     Page::App => {
                         self.app_ui(ui);
                         self.log_ui(ui);
@@ -1360,13 +1453,16 @@ mod tests {
                 Harness::builder().with_size([width, height]).build_eframe(move |cc| {
                     let mut app = GuiApp::new(cc.egui_ctx.clone(), app_dir, true);
                     app.set_window_pref(pref);
+                    // The Mac-only card, the longest thing on its page.
+                    app.login_agent = Some(false);
+                    app.login_misplaced = true;
                     app
                 });
             harness.step();
             let bottom = harness.get_by_label("Başlat").rect().top();
             for (page, tab, last) in [
                 (Page::Connection, "Bağlantı", "Bu bilgisayarın adı"),
-                (Page::Settings, "Ayarlar", "Pano paylaşımı"),
+                (Page::Settings, "Ayarlar", LOGIN_NOTE),
                 (Page::App, "Uygulama", "Günlük"),
             ] {
                 harness.get_by_label(tab).click();

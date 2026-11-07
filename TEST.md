@@ -1,6 +1,6 @@
 # Deneme yönergesi
 
-İki bilgisayarda (Windows ve Mac) adım adım deneme listesi. Her adımın yanında beklenen sonuç var. Beklenenden farklı bir şey olursa adım numarasını, ne gördüğünüzü (ekran görüntüsü) ve penceredeki **Ayarlar > Günlük** içeriğini gönderin.
+İki bilgisayarda (Windows ve Mac) adım adım deneme listesi. Her adımın yanında beklenen sonuç var. Beklenenden farklı bir şey olursa adım numarasını, ne gördüğünüzü (ekran görüntüsü) ve penceredeki **Uygulama sekmesi > Günlük** içeriğini gönderin.
 
 Kısaltmalar: **W** = Windows bilgisayar, **M** = Mac.
 
@@ -92,7 +92,7 @@ Aşağıda klavye ve farenin W'ye bağlı olduğu varsayıldı. Mac'in klavyesin
 | # | Adım | Beklenen |
 |---|---|---|
 | 6.1 | Ayarların doğru olduğundan emin olun (W: Bağlantı bekle; M: Bağlan + adres) ve bir kez **Başlat**'a basın (ayarlar böyle kaydedilir). |  |
-| 6.2 | **Ayarlar > Uygulama > Oturum açılınca başlat** anahtarını açın (iki tarafta). | Anahtar açık kalır. W: Görev Yöneticisi > Başlangıç uygulamaları'nda SwitchControl görünür. M: Sistem Ayarları > Genel > Giriş Öğeleri'nde görünebilir. |
+| 6.2 | **Uygulama sekmesi > Oturum açılınca başlat** anahtarını açın (iki tarafta). | Anahtar açık kalır. W: Görev Yöneticisi > Başlangıç uygulamaları'nda SwitchControl görünür. M: Sistem Ayarları > Genel > Giriş Öğeleri'nde görünebilir. |
 | 6.3 | İki bilgisayarda oturumu kapatıp yeniden açın (ya da yeniden başlatın). | SwitchControl kendiliğinden simge olarak başlar (pencere bir an görünüp kaybolabilir) ve iki taraf birbirine bağlanır; geçiş çalışır. |
 | 6.4 | Anahtarı kapatın, yeniden oturum açın. | SwitchControl kendiliğinden başlamaz. |
 
@@ -105,7 +105,7 @@ Hazırlık (bir kez):
 
 | # | Adım | Beklenen |
 |---|---|---|
-| 7.1 | Bağlıyken iki tarafta **Ayarlar > Uyandırma adresi (MAC)** alanına bakın. | Alan diğer bilgisayarın kablolu kartının adresiyle dolu (ör. `3C:22:FB:…`). Günlük'te `… can be woken at …` satırı. |
+| 7.1 | Bağlıyken iki tarafta **Uygulama sekmesi > Uyandırma adresi (MAC)** alanına bakın. | Alan diğer bilgisayarın kablolu kartının adresiyle dolu (ör. `3C:22:FB:…`). Günlük'te `… can be woken at …` satırı. |
 | 7.2 | W'de Bağlantı sayfasında **Uyut**'a basın. | M uyur; W "Bağlanıyor…"/"Bağlantı bekleniyor"a döner ve **Diğer bilgisayarı uyandır** düğmesi çıkar. |
 | 7.3 | W'de **Diğer bilgisayarı uyandır**'a basın. | "Uyandırma paketi gönderildi" yazısı; M birkaç saniyede uyanır (ekran açılmayabilir, ağ uyanır) ve iki taraf yeniden bağlanır. |
 | 7.4 | M'de **Kapat**'a basın. | "… kapatılsın mı?" sorusu çıkar. **Vazgeç** hiçbir şey yapmaz. |
@@ -113,9 +113,31 @@ Hazırlık (bir kez):
 | 7.6 | M'de **Diğer bilgisayarı uyandır**. | W açılır (BIOS ayarı açıksa), oturum açınca SwitchControl başlar ve bağlanır. |
 | 7.7 | W'de **Kapat**'a basın (hedef M). | Soruda turuncu uyarı: kapalı Mac ağdan uyandırılamaz. **Vazgeç** deyin. |
 | 7.8 | Simgenin menüsüne bakın, bağlıyken ve değilken. | Bağlıyken "Diğer bilgisayarı uyut/kapat…", değilken "…uyandır" seçilebilir. |
-| 7.9 | M'yi uyutun. W'de **Ayarlar > Başlayınca diğer bilgisayarı uyandır**'ı açın (**Oturum açılınca başlat** da açık), sonra W'yi yeniden başlatıp oturum açın. | W'de SwitchControl başlayınca M uyanır ve iki taraf bağlanır. W Günlük'ünde `Wake-on-LAN packet sent …` satırları (bağlanana kadar en çok 4). |
+| 7.9 | M'yi uyutun. W'de **Uygulama sekmesi > Başlayınca diğer bilgisayarı uyandır**'ı açın (**Oturum açılınca başlat** da açık), sonra W'yi yeniden başlatıp oturum açın. | W'de SwitchControl başlayınca M uyanır ve iki taraf bağlanır. W Günlük'ünde `Wake-on-LAN packet sent …` satırları (bağlanana kadar en çok 4). |
 
-## 8. Gönderilecekler
+## 8. Açılışta bağlanma ve pencere boyutu
+
+| # | Adım | Beklenen |
+|---|---|---|
+| 8.1 | İki tarafta eşleşme tamamken programı kapatıp yeniden açın. | **Başlat**'a basmadan bağlantı kurulur ("Bağlı"); düğme "Durdur" görünür. |
+| 8.2 | **Durdur**'a basın, programı kapatıp yeniden açın. | Yine kendiliğinden başlar. **Uygulama > Açılınca bağlantıyı başlat**'ı kapatıp yeniden açın: başlamaz. |
+| 8.3 | **Uygulama > Pencere boyutu**: Kompakt, Standart, Otomatik. | Pencere hemen küçülür/büyür; üç sekmenin hepsi kaydırmadan sığar, yazılar kesilmez. |
+| 8.4 | Küçük ekranlı bilgisayarda (ör. 1366×768 ya da %150 ölçek) Otomatik. | Pencere tamamen ekrana sığar (Kompakt). Büyük ekranda Standart. |
+
+## 9. Şifre ekranı (Mac)
+
+Hazırlık: M'de **Ayarlar > Şifre ekranı > Kur** (yönetici şifresi) ya da `SwitchControl-macOS.pkg`. Uygulama Uygulamalar klasöründe olmalı. Sonra bir kez iki tarafı pencereden eşleştirin ve bağlantıyı başlatın (ayarlar ortak klasöre yazılır). `switchcontrol --service-status` (Terminal) kurulu olduğunu söylemeli.
+
+| # | Adım | Beklenen |
+|---|---|---|
+| 9.1 | M'de ekranı kilitleyin (Ctrl+Cmd+Q). W'den fareyi kenara götürüp M'ye geçin, şifreyi yazın. | Şifre alanına yazılır, oturum açılır. **Çalışmazsa bildirin**: `secure input` ve izinlerle ilgili satırları paylaşın. |
+| 9.2 | M'yi uyutun, W'den **Diğer bilgisayarı uyandır**, W'den şifreyi yazın. | M uyanır, kilit ekranı gelir, şifre yazılır. |
+| 9.3 | M'de oturumu kapatın (oturum açma ekranı). W'den bağlanıp şifreyi yazın. | Bağlanılır ve yazılır. Günlük: M'de `cat /var/log/switchcontrol.log` (bağlantı, izin satırları). |
+| 9.4 | FileVault açıksa M'yi yeniden başlatın. | İlk disk açma ekranında hiçbir şey çalışmaz (beklenen); disk açıldıktan sonra oturum açma ekranında 9.3 gibi. |
+| 9.5 | Oturum açtıktan sonra. | Bağlantı birkaç saniyede pencereli uygulamaya geçer ve devam eder. |
+| 9.6 | **Kaldır**. | Durum "kurulu değil"; yeniden başlatınca oturum açma ekranında bağlantı olmaz. |
+
+## 10. Gönderilecekler
 
 - Hangi adımlar beklendiği gibi, hangileri değil (numaraları yeterli).
 - Sorunlu adımların ekran görüntüsü ve iki taraftaki **Günlük** içeriği.
