@@ -548,13 +548,17 @@ impl GuiApp {
 
     /// Switches between the two window sizes, now.
     fn set_window_pref(&mut self, pref: Pref) {
+        self.apply_window_pref(pref, window::primary_screen().1);
+        self.save_settings();
+    }
+
+    /// The window size and density for `pref` on a screen `screen_h` tall.
+    fn apply_window_pref(&mut self, pref: Pref, screen_h: f32) {
         self.form.window = pref;
-        let screen_h = window::primary_screen().1;
         self.density = window::density(pref, screen_h);
         theme::set_density(&self.ctx, self.density);
         let (width, height) = window::size(self.density, screen_h);
         self.ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(width, height)));
-        self.save_settings();
     }
 
     fn save_settings(&mut self) {
@@ -1466,7 +1470,8 @@ mod tests {
             let mut harness =
                 Harness::builder().with_size([width, height]).build_eframe(move |cc| {
                     let mut app = GuiApp::new(cc.egui_ctx.clone(), app_dir, true);
-                    app.set_window_pref(pref);
+                    // Whatever the screen of the machine running the test is.
+                    app.apply_window_pref(pref, 1080.0);
                     // The Mac-only card, the longest thing on its page.
                     app.login_agent = Some(false);
                     app.login_misplaced = true;
