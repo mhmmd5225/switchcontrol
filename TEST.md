@@ -51,6 +51,7 @@ Aşağıda klavye ve farenin W'ye bağlı olduğu varsayıldı. Mac'in klavyesin
 | 3.3b | Aynı sayfayı önce W'de, sonra M'de tekerlekle kaydırıp karşılaştırın; sonra W'de **Ayarlar > Kaydırma hızı**'nı değiştirip (Durdur, Başlat) tekrar deneyin. | Bir tık iki tarafta da yaklaşık aynı yol (3 satır) kaydırır. Ayar büyüdükçe M'de kaydırma hızlanır, küçüldükçe yavaşlar. |
 | 3.4 | Fareyi geri, ortak kenara götürün. | İmleç W'ye döner, aynı yükseklikte. |
 | 3.5 | W'de **Geçiş: Kısa itince** (önce Durdur, değiştirin, Başlat). Kenara değip bekleyin; sonra kenara doğru itmeye devam edin. | Değince hemen geçmez; çubuğun ortasında beyaz dolgu büyür, dolunca geçer. Kenardan çekilirseniz dolgu sıfırlanır. |
+| 3.5b | Fare kenardan uzaktayken ekranın kenarlarına bakın. | Hiçbir şerit ya da siyah alan **yok**: çubuk yalnızca fare kenara yaklaşınca belirir, uzaklaşınca kaybolur. |
 | 3.6 | Kenar çubuğu anahtarını kapatıp yeniden başlatın, kenara yaklaşın. | Çubuk görünmez, geçiş yine çalışır. |
 | 3.7 | M'deyken **Ctrl+Alt+Shift+Esc** (klavye W'deyse) basın. | Klavye ve fare anında W'ye döner. |
 

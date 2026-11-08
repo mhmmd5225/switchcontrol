@@ -1,10 +1,11 @@
 //! The glowing bar at the edge leading to the other computer.
 //!
 //! It lives in a window of its own: transparent, click-through, always on
-//! top and never focused, laid along the whole shared edge. The window stays
-//! put while the engine runs; only what it draws changes, and the engine
-//! repaints it directly, so the bar stays current even while the main window
-//! is minimized or covered (eframe then stops drawing the main window).
+//! top and never focused, laid along the whole shared edge. The window is
+//! shown only while the bar has something to draw: on Windows the window
+//! cannot really be see-through and an idle one would be a black strip. The
+//! engine repaints it directly, so the bar stays current even while the main
+//! window is minimized or covered (eframe then stops drawing the main window).
 
 use std::sync::{Arc, Mutex};
 
@@ -65,10 +66,14 @@ pub struct EdgeBar {
 }
 
 impl EdgeBar {
-    /// Records a new hint and redraws the bar window alone.
+    /// Records a new hint and redraws the bar window alone, showing or
+    /// hiding it as the bar appears or goes.
     pub fn set(&self, ctx: &egui::Context, hint: Option<EdgeHint>) {
         let mut current = self.hint.lock().unwrap();
         if *current != hint {
+            if let Some(visible) = visibility_change(current.is_some(), hint.is_some()) {
+                ctx.send_viewport_cmd_to(viewport_id(), egui::ViewportCommand::Visible(visible));
+            }
             *current = hint;
             ctx.request_repaint_of(viewport_id());
         }
@@ -92,6 +97,7 @@ impl EdgeBar {
             .with_mouse_passthrough(true)
             .with_window_level(egui::WindowLevel::AlwaysOnTop)
             .with_taskbar(false)
+            .with_visible(false)
             .with_active(false);
         let hint = self.hint.clone();
         ctx.show_viewport_deferred(viewport_id(), builder, move |ui, _class| {
@@ -101,6 +107,12 @@ impl EdgeBar {
             }
         });
     }
+}
+
+/// Whether the bar window must be shown (`Some(true)`) or hidden
+/// (`Some(false)`) now that the bar goes from `was` to `is` drawn.
+fn visibility_change(was: bool, is: bool) -> Option<bool> {
+    (was != is).then_some(is)
 }
 
 /// Draws the glow for `hint` into the bar window.
@@ -164,6 +176,15 @@ fn band(mesh: &mut Mesh, x: (f32, f32), y: (f32, f32), outer: Color32, inner: Co
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_follows_the_bar() {
+        assert_eq!(visibility_change(false, true), Some(true));
+        assert_eq!(visibility_change(true, false), Some(false));
+        // Only a change of state is a change of visibility.
+        assert_eq!(visibility_change(true, true), None);
+        assert_eq!(visibility_change(false, false), None);
+    }
 
     #[test]
     fn strip_hugs_the_shared_edge() {
