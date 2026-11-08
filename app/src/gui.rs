@@ -15,22 +15,38 @@ use eframe::egui::{self, RichText};
 use sc_core::Side;
 use sc_platform::Permissions;
 use sc_platform::sys;
+use sc_proto::{Os, Power};
 
 use crate::autostart;
-use crate::config::{self, FileConfig, RunFlags};
+use crate::config::{self, FileConfig, RunFlags, SETTINGS_FILE};
 use crate::discovery::Listener;
 use crate::edgebar::{EdgeBar, Strip};
 use crate::engine::{Engine, LinkState, Report};
 use crate::identity::{self, Fingerprint, TrustStore};
+use crate::loginwindow;
 use crate::net::{self, PinSource, Waiting};
 use crate::pairing::normalize_pin;
-use crate::theme::{self, Kind, Link, Palette};
-use crate::tray::{Tray, TrayCommand};
+use crate::power;
+use crate::theme::{self, Density, Kind, Link, Palette};
+use crate::tray::{PowerMenu, Tray, TrayCommand};
+use crate::wake;
+use crate::window::{self, Pref};
 
-const SETTINGS_FILE: &str = "settings.toml";
 const LOG_LINES: usize = 500;
-/// The window does not resize: both pages are laid out to fit it.
-const WINDOW_SIZE: (f32, f32) = (460.0, 780.0);
+/// Under the game-mode switch: what it does and what it risks.
+const GAME_NOTE: &str = "Bir oyun imleci kilitlese de kenara yaklaşık 0,8 sn itince diğer \
+    bilgisayara geçer. Kamerayı çevirirken yanlışlıkla geçebilir; \
+    Ctrl+Alt+Shift+Esc her zaman geri getirir.";
+/// Under the login-screen switch: what it is for and what it needs.
+const LOGIN_NOTE: &str = "Kilit ve oturum açma ekranında şifreyi diğer bilgisayardan \
+    yazmak için. Bir kez yönetici şifresi ister. FileVault açıksa ilk açılışta çalışmaz.";
+/// The window does not resize by hand: one of two fixed sizes, see [`window`].
+/// How long "packet sent" stays under the status after waking the other computer.
+const WAKE_NOTE: Duration = Duration::from_secs(6);
+/// Waking at start is repeated this often, a few times, until connected:
+/// right after login the network may not be up yet.
+const WAKE_RETRY: Duration = Duration::from_secs(10);
+const WAKE_TRIES: u32 = 4;
 
 /// The emergency hotkey as this OS spells it.
 const HOTKEY: &str =
@@ -39,10 +55,14 @@ const HOTKEY: &str =
 /// Opens the window. `at_login`: started by [`autostart`], so hide in the
 /// tray and start sharing right away.
 pub fn run(at_login: bool) -> Result<(), String> {
+    let data_dir = identity::default_dir();
+    let screen_h = window::primary_screen().1;
+    let pref = saved_window_pref(&data_dir);
+    let (width, height) = window::size(window::density(pref, screen_h), screen_h);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("SwitchControl")
-            .with_inner_size([WINDOW_SIZE.0, WINDOW_SIZE.1])
+            .with_inner_size([width, height])
             .with_resizable(false)
             .with_maximize_button(false)
             .with_icon(Arc::new(
@@ -51,7 +71,6 @@ pub fn run(at_login: bool) -> Result<(), String> {
             )),
         ..Default::default()
     };
-    let data_dir = identity::default_dir();
     // Other systems have no capture backend; the window still works for trying it out.
     let dry_run = cfg!(not(any(windows, target_os = "macos")));
     eframe::run_native(
@@ -63,9 +82,7 @@ pub fn run(at_login: bool) -> Result<(), String> {
                 Ok(tray) => app.tray = Some(tray),
                 Err(e) => app.push_log(format!("no tray icon: {e}")),
             }
-            if at_login {
-                app.launched_at_login();
-            }
+            app.launched(at_login);
             Ok(Box::new(app))
         }),
     )
@@ -83,6 +100,7 @@ enum Mode {
 enum Page {
     Connection,
     Settings,
+    App,
 }
 
 /// The editable settings.
@@ -93,11 +111,20 @@ struct Form {
     address: String,
     name: String,
     speed: f64,
+    scroll_speed: f64,
     swap: bool,
     edge_delay_ms: u64,
     edge_bar: bool,
     clipboard: bool,
     announce: bool,
+    /// The other computer's network card, learned on connecting or typed in.
+    wake_mac: String,
+    /// Wake the other computer whenever sharing starts.
+    wake_on_start: bool,
+    /// Start sharing as soon as the program opens.
+    start_on_launch: bool,
+    window: Pref,
+    game_mode: bool,
     /// Kept from the file; the window has no field for it.
     listen: Option<String>,
 }
@@ -117,11 +144,17 @@ impl Form {
             address: file.connect.unwrap_or_default(),
             name: file.name.unwrap_or_else(config::default_name),
             speed: file.speed.unwrap_or(1.0),
+            scroll_speed: file.scroll_speed.unwrap_or(1.0),
             swap: file.swap_ctrl_cmd.unwrap_or(true),
             edge_delay_ms: file.edge_delay_ms.unwrap_or(0),
             edge_bar: file.edge_bar.unwrap_or(true),
             clipboard: file.clipboard.unwrap_or(true),
             announce: file.announce.unwrap_or(true),
+            wake_mac: file.wake_mac.unwrap_or_default(),
+            wake_on_start: file.wake_on_start.unwrap_or(false),
+            start_on_launch: file.start_on_launch.unwrap_or(true),
+            window: Pref::parse(file.window_size.as_deref()),
+            game_mode: file.game_mode.unwrap_or(false),
             listen: file.listen,
         }
     }
@@ -134,11 +167,17 @@ impl Form {
             listen: if connect { None } else { self.listen.clone() },
             connect: connect.then(|| self.address.trim().to_string()),
             speed: Some(self.speed),
+            scroll_speed: Some(self.scroll_speed),
             swap_ctrl_cmd: Some(self.swap),
             edge_delay_ms: Some(self.edge_delay_ms),
             edge_bar: Some(self.edge_bar),
             clipboard: Some(self.clipboard),
             announce: Some(self.announce),
+            wake_mac: Some(self.wake_mac.trim().to_string()).filter(|m| !m.is_empty()),
+            wake_on_start: Some(self.wake_on_start),
+            start_on_launch: Some(self.start_on_launch),
+            window_size: Some(self.window.as_str().to_string()),
+            game_mode: Some(self.game_mode),
             data_dir: None,
         }
     }
@@ -202,16 +241,38 @@ pub struct GuiApp {
     quitting: bool,
     /// Whether the OS starts SwitchControl at login.
     autostart: bool,
+    /// Asking whether to really shut the other computer down.
+    confirm_shutdown: bool,
+    /// macOS: whether the login-screen service is installed. `None` elsewhere.
+    login_agent: Option<bool>,
+    /// Installing or removing it, waiting for the administrator password.
+    login_job: Option<Receiver<Result<(), String>>>,
+    /// The program is not in the Applications folder, where the service looks for it.
+    login_misplaced: bool,
+    /// How much room the widgets take, from the screen and the user's choice.
+    density: Density,
+    /// When the last Wake-on-LAN packet went out.
+    woken_at: Option<Instant>,
+    /// Waking at start: when to send again, and how many more times.
+    wake_retry: Option<(Instant, u32)>,
 }
 
 impl GuiApp {
     pub fn new(ctx: egui::Context, data_dir: PathBuf, dry_run: bool) -> GuiApp {
         theme::install(&ctx);
         let file = config::load(&data_dir.join(SETTINGS_FILE)).unwrap_or_default();
+        let form = Form::from_file(file);
+        let density = window::density(form.window, window::primary_screen().1);
+        theme::set_density(&ctx, density);
         let (reports_tx, reports_rx) = mpsc::channel();
         GuiApp {
             ctx,
-            form: Form::from_file(file),
+            login_agent: loginwindow::supported().then(loginwindow::is_installed),
+            login_job: None,
+            login_misplaced: !std::env::current_exe()
+                .is_ok_and(|exe| loginwindow::in_applications(&exe)),
+            density,
+            form,
             page: Page::Connection,
             paired: paired_list(&data_dir),
             data_dir,
@@ -232,18 +293,28 @@ impl GuiApp {
             hide_on_first_frame: false,
             quitting: false,
             autostart: autostart::is_enabled(),
+            confirm_shutdown: false,
+            woken_at: None,
+            wake_retry: None,
         }
     }
 
-    /// Started at login: go to the tray and share with the saved settings.
-    fn launched_at_login(&mut self) {
-        self.hide_on_first_frame = self.tray.is_some();
-        if self.form.mode == Mode::Listen
-            || !self.form.address.trim().is_empty()
-            || !self.paired.is_empty()
-        {
+    /// The program just opened. Sharing starts right away with the saved
+    /// settings (unless switched off), so nothing needs pressing. Started at
+    /// login: it also goes to the tray.
+    fn launched(&mut self, at_login: bool) {
+        self.hide_on_first_frame = at_login && self.tray.is_some();
+        if (at_login || self.form.start_on_launch) && self.can_start_quietly() {
             self.start();
         }
+    }
+
+    /// Whether `start` would not need to ask the user anything first: waiting
+    /// for a connection, an address to connect to, or a paired computer to find.
+    fn can_start_quietly(&self) -> bool {
+        self.form.mode == Mode::Listen
+            || !self.form.address.trim().is_empty()
+            || !self.paired.is_empty()
     }
 
     /// Carries out what was picked from the tray icon, and keeps its status current.
@@ -262,6 +333,15 @@ impl GuiApp {
                         self.start()
                     }
                 }
+                TrayCommand::Sleep => self.send_power(Power::Sleep),
+                // Shutting down is asked about in the window.
+                TrayCommand::Shutdown => {
+                    self.page = Page::Connection;
+                    self.confirm_shutdown = true;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+                TrayCommand::Wake => self.wake(),
                 TrayCommand::Quit => {
                     self.quitting = true;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -275,8 +355,14 @@ impl GuiApp {
         }
         let status = self.status().0;
         let running = self.running.is_some();
+        let os = self.peer_os();
+        let menu = PowerMenu {
+            sleep: os.is_some_and(|os| power::supported(os, Power::Sleep)),
+            shutdown: os.is_some_and(|os| power::supported(os, Power::Shutdown)),
+            wake: os.is_none() && self.wake_mac().is_some(),
+        };
         if let Some(tray) = &mut self.tray {
-            tray.update(&status, running);
+            tray.update(&status, running, menu);
         }
     }
 
@@ -307,10 +393,8 @@ impl GuiApp {
             self.error = Some("Bağlanılacak bilgisayarın adresini girin.".into());
             return;
         }
+        self.save_settings();
         let file = self.form.to_file();
-        if let Err(e) = config::save(&self.data_dir.join(SETTINGS_FILE), &file) {
-            self.push_log(format!("could not save settings: {e}"));
-        }
         let flags = RunFlags { dry_run: self.dry_run, ..RunFlags::default() };
         let mut settings = match config::resolve(file, flags) {
             Ok(settings) => settings,
@@ -349,6 +433,33 @@ impl GuiApp {
             engine: Some(Engine::start(settings, pin, report)),
             pin_tx: Some(pin_tx),
         });
+        if self.form.wake_on_start && self.wake_mac().is_some() {
+            self.wake_retry = Some((Instant::now(), WAKE_TRIES));
+            self.wake_at_start();
+        }
+    }
+
+    /// Wakes the other computer while sharing has started but is not
+    /// connected yet, a few times over.
+    fn wake_at_start(&mut self) {
+        let Some((at, left)) = self.wake_retry else { return };
+        if self.running.is_none() || self.peer_os().is_some() || left == 0 {
+            self.wake_retry = None;
+            return;
+        }
+        if Instant::now() < at {
+            return;
+        }
+        let Some(mac) = self.wake_mac() else { return };
+        match wake::send(mac) {
+            Ok(()) => {
+                self.push_log(format!("Wake-on-LAN packet sent to {}", wake::format_mac(mac)))
+            }
+            // Likely no network yet; the next try may find one.
+            Err(e) => self.push_log(format!("could not send the Wake-on-LAN packet: {e}")),
+        }
+        self.wake_retry = Some((Instant::now() + WAKE_RETRY, left - 1));
+        self.ctx.request_repaint_after(WAKE_RETRY);
     }
 
     fn stop(&mut self) {
@@ -359,7 +470,100 @@ impl GuiApp {
         self.view.remote = false;
         self.view.show_pin = None;
         self.view.ask_pin = None;
+        self.confirm_shutdown = false;
+        self.wake_retry = None;
         self.paired = paired_list(&self.data_dir);
+    }
+
+    /// The other computer's system, while connected.
+    fn peer_os(&self) -> Option<Os> {
+        match &self.view.link {
+            Some(LinkState::Connected { os, .. }) => Some(*os),
+            _ => None,
+        }
+    }
+
+    fn wake_mac(&self) -> Option<wake::Mac> {
+        wake::parse_mac(&self.form.wake_mac)
+    }
+
+    fn send_power(&mut self, power: Power) {
+        self.confirm_shutdown = false;
+        match self.running.as_ref().and_then(|r| r.engine.as_ref()) {
+            Some(engine) if self.peer_os().is_some() => engine.send_power(power),
+            _ => self.push_log("not connected to the other computer".into()),
+        }
+    }
+
+    /// Sends the Wake-on-LAN packet; works whether sharing runs or not.
+    fn wake(&mut self) {
+        let Some(mac) = self.wake_mac() else { return };
+        match wake::send(mac) {
+            Ok(()) => {
+                self.push_log(format!("Wake-on-LAN packet sent to {}", wake::format_mac(mac)));
+                self.woken_at = Some(Instant::now());
+                self.ctx.request_repaint_after(WAKE_NOTE);
+            }
+            Err(e) => self.error = Some(format!("Uyandırma paketi gönderilemedi: {e}")),
+        }
+    }
+
+    /// Keeps the address the other computer told us, for waking it later.
+    fn learn_mac(&mut self, mac: wake::Mac) {
+        if self.wake_mac() == Some(mac) {
+            return;
+        }
+        self.form.wake_mac = wake::format_mac(mac);
+        self.save_settings();
+    }
+
+    /// Installs or removes the login-screen service; macOS asks for the
+    /// administrator password meanwhile, so it runs on a thread of its own.
+    fn start_login_job(&mut self, install: bool) {
+        let (tx, rx) = mpsc::channel();
+        let ctx = self.ctx.clone();
+        std::thread::spawn(move || {
+            let result = if install { loginwindow::install() } else { loginwindow::uninstall() };
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+        self.login_job = Some(rx);
+    }
+
+    /// After the service is installed the window uses the folder it shares,
+    /// where the identity and the paired computers move over.
+    fn use_shared_data_dir(&mut self) {
+        let was_running = self.running.is_some();
+        if was_running {
+            self.stop();
+        }
+        self.data_dir = identity::default_dir();
+        self.paired = paired_list(&self.data_dir);
+        self.save_settings();
+        if was_running {
+            self.start();
+        }
+    }
+
+    /// Switches between the two window sizes, now.
+    fn set_window_pref(&mut self, pref: Pref) {
+        self.apply_window_pref(pref, window::primary_screen().1);
+        self.save_settings();
+    }
+
+    /// The window size and density for `pref` on a screen `screen_h` tall.
+    fn apply_window_pref(&mut self, pref: Pref, screen_h: f32) {
+        self.form.window = pref;
+        self.density = window::density(pref, screen_h);
+        theme::set_density(&self.ctx, self.density);
+        let (width, height) = window::size(self.density, screen_h);
+        self.ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(width, height)));
+    }
+
+    fn save_settings(&mut self) {
+        if let Err(e) = config::save(&self.data_dir.join(SETTINGS_FILE), &self.form.to_file()) {
+            self.push_log(format!("could not save settings: {e}"));
+        }
     }
 
     fn answer_pin(&mut self, pin: Option<String>) {
@@ -389,10 +593,14 @@ impl GuiApp {
                     // A new session (or the end of one) ends any pairing on screen.
                     self.view.show_pin = None;
                     self.view.ask_pin = None;
-                    if matches!(state, LinkState::Connected { .. }) {
+                    if let LinkState::Connected { mac, .. } = &state {
                         self.paired = paired_list(&self.data_dir);
+                        if let Some(mac) = *mac {
+                            self.learn_mac(mac);
+                        }
                     } else {
                         self.view.remote = false;
+                        self.confirm_shutdown = false;
                     }
                     self.view.link = Some(state);
                 }
@@ -411,6 +619,20 @@ impl GuiApp {
                     }
                     self.stop();
                 }
+            }
+        }
+        if let Some(result) = self.login_job.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.login_job = None;
+            self.login_agent = Some(loginwindow::is_installed());
+            match result {
+                Ok(()) if self.login_agent == Some(true) => {
+                    self.push_log("login-screen service installed".into());
+                    self.use_shared_data_dir();
+                }
+                Ok(()) => self.push_log("login-screen service removed".into()),
+                // Cancelling the password dialog is not worth an error.
+                Err(e) if e.contains("-128") => {}
+                Err(e) => self.error = Some(format!("Şifre ekranı hizmeti: {e}")),
             }
         }
         if self.perms_checked.elapsed() >= Duration::from_secs(1) {
@@ -466,7 +688,8 @@ impl GuiApp {
         let (_, _, link) = self.status();
         let dry_run = self.dry_run && self.running.is_some();
         ui.horizontal(|ui| {
-            ui.label(theme::semibold("SwitchControl").size(20.0));
+            let title = theme::Metrics::of(ui).font_title;
+            ui.label(theme::semibold("SwitchControl").size(title));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 theme::status_pill(ui, link);
                 if dry_run {
@@ -478,21 +701,21 @@ impl GuiApp {
         theme::tabs(
             ui,
             &mut self.page,
-            &[(Page::Connection, "Bağlantı"), (Page::Settings, "Ayarlar")],
+            &[(Page::Connection, "Bağlantı"), (Page::Settings, "Ayarlar"), (Page::App, "Uygulama")],
         );
     }
 
-    fn status_ui(&self, ui: &mut egui::Ui) {
+    fn status_ui(&mut self, ui: &mut egui::Ui) {
         let (title, detail, link) = self.status();
         let peer = match &self.view.link {
-            Some(LinkState::Connected { peer, .. }) => peer.as_str(),
-            _ => "—",
+            Some(LinkState::Connected { peer, .. }) => peer.clone(),
+            _ => "—".into(),
         };
         theme::card(ui, |ui| {
             let p = Palette::of(ui);
-            theme::monitors(ui, self.form.side == Side::Left, link, self.form.name.trim(), peer);
+            theme::monitors(ui, self.form.side == Side::Left, link, self.form.name.trim(), &peer);
             ui.vertical_centered(|ui| {
-                ui.label(theme::semibold(title).size(16.0));
+                ui.label(theme::semibold(title).size(theme::Metrics::of(ui).font_head));
                 if !detail.is_empty() {
                     ui.label(RichText::new(detail).color(p.muted));
                 }
@@ -501,14 +724,100 @@ impl GuiApp {
                     ui.label(RichText::new(error).color(p.red));
                 }
             });
+            self.power_ui(ui, &peer);
         });
+        self.confirm_shutdown_ui(ui);
+    }
+
+    /// Sleep and shut down while connected, wake while not.
+    fn power_ui(&mut self, ui: &mut egui::Ui, peer: &str) {
+        let p = Palette::of(ui);
+        let mut pick = None;
+        if let Some(os) = self.peer_os() {
+            let actions =
+                [(Power::Sleep, "Uyut", Kind::Secondary), (Power::Shutdown, "Kapat", Kind::Danger)];
+            let actions: Vec<_> =
+                actions.into_iter().filter(|(power, ..)| power::supported(os, *power)).collect();
+            if actions.is_empty() {
+                return;
+            }
+            ui.add_space(theme::Metrics::of(ui).gap);
+            centered(ui, |ui| {
+                ui.label(RichText::new(format!("{peer}:")).color(p.muted));
+                for (power, label, kind) in actions {
+                    if theme::button(ui, label, kind).clicked() {
+                        pick = Some(power);
+                    }
+                }
+            });
+        } else if self.wake_mac().is_some() {
+            ui.add_space(theme::Metrics::of(ui).gap);
+            centered(ui, |ui| {
+                if theme::button(ui, "Diğer bilgisayarı uyandır", Kind::Secondary).clicked() {
+                    self.wake();
+                }
+            });
+            if self.woken_at.is_some_and(|at| at.elapsed() < WAKE_NOTE) {
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        RichText::new(
+                            "Uyandırma paketi gönderildi; açılması birkaç saniye sürebilir.",
+                        )
+                        .small()
+                        .color(p.muted),
+                    );
+                });
+            }
+        }
+        match pick {
+            Some(Power::Shutdown) => self.confirm_shutdown = true,
+            Some(power) => self.send_power(power),
+            None => {}
+        }
+    }
+
+    fn confirm_shutdown_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(os) = self.peer_os().filter(|_| self.confirm_shutdown) else { return };
+        let peer = match &self.view.link {
+            Some(LinkState::Connected { peer, .. }) => peer.clone(),
+            _ => return,
+        };
+        let p = Palette::of(ui);
+        ui.add_space(theme::Metrics::of(ui).gap);
+        let mut answer = None;
+        theme::notice(ui, p.red, |ui| {
+            ui.label(theme::semibold(format!("{peer} kapatılsın mı?")));
+            ui.label(RichText::new("Kaydedilmemiş işler kaybolabilir.").color(p.muted));
+            if os == Os::MacOs {
+                ui.label(
+                    RichText::new(
+                        "Kapalı bir Mac ağdan uyandırılamaz; sonra uyandırmak için Uyut'u seçin.",
+                    )
+                    .color(p.amber),
+                );
+            }
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if theme::button(ui, "Evet, kapat", Kind::Danger).clicked() {
+                    answer = Some(true);
+                }
+                if theme::button(ui, "Vazgeç", Kind::Ghost).clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        match answer {
+            Some(true) => self.send_power(Power::Shutdown),
+            Some(false) => self.confirm_shutdown = false,
+            None => {}
+        }
     }
 
     fn permissions_ui(&mut self, ui: &mut egui::Ui) {
         if self.perms.all_granted() {
             return;
         }
-        ui.add_space(8.0);
+        ui.add_space(theme::Metrics::of(ui).gap);
         let p = Palette::of(ui);
         theme::notice(ui, p.amber, |ui| {
             ui.label(theme::semibold("macOS izinleri gerekli"));
@@ -546,14 +855,14 @@ impl GuiApp {
     fn pairing_ui(&mut self, ui: &mut egui::Ui) {
         let p = Palette::of(ui);
         if let Some(pin) = &self.view.show_pin {
-            ui.add_space(8.0);
+            ui.add_space(theme::Metrics::of(ui).gap);
             theme::notice(ui, p.accent, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.label(theme::semibold("Eşleştirme isteği"));
                     ui.label(
                         RichText::new(format!("{} {}", &pin[..3], &pin[3..]))
                             .monospace()
-                            .size(36.0)
+                            .size(theme::Metrics::of(ui).font_pin)
                             .color(p.accent),
                     );
                     ui.label(RichText::new("Bu PIN'i diğer bilgisayara girin.").color(p.muted));
@@ -561,7 +870,7 @@ impl GuiApp {
             });
         }
         if let Some(addr) = self.view.ask_pin {
-            ui.add_space(8.0);
+            ui.add_space(theme::Metrics::of(ui).gap);
             let mut answer = None;
             theme::notice(ui, p.accent, |ui| {
                 ui.label(theme::semibold(format!("{} ile eşleştirme", addr.ip())));
@@ -604,13 +913,15 @@ impl GuiApp {
 
     /// Who connects to whom: everything needed to press Başlat.
     fn connection_ui(&mut self, ui: &mut egui::Ui) {
+        // Settings are locked while sharing runs, row by row: this computer's
+        // address stays copyable, which is when it is needed.
         let enabled = self.running.is_none();
         let local_ip = self.local_ip;
         let paired = &self.paired;
         let form = &mut self.form;
-        ui.add_enabled_ui(enabled, |ui| {
-            ui.add_space(8.0);
-            theme::card(ui, |ui| {
+        ui.add_space(theme::Metrics::of(ui).gap);
+        theme::card(ui, |ui| {
+            ui.add_enabled_ui(enabled, |ui| {
                 theme::row(ui, "Rol", |ui| {
                     theme::segmented(
                         ui,
@@ -618,9 +929,11 @@ impl GuiApp {
                         &[(Mode::Listen, "Bağlantı bekle"), (Mode::Connect, "Bağlan")],
                     )
                 });
-                theme::divider(ui);
-                match form.mode {
-                    Mode::Connect => {
+            });
+            theme::divider(ui);
+            match form.mode {
+                Mode::Connect => {
+                    ui.add_enabled_ui(enabled, |ui| {
                         let (label, edit) = theme::row(ui, "Adres", |ui| {
                             let hint = if paired.is_empty() {
                                 "192.168.1.20"
@@ -637,27 +950,31 @@ impl GuiApp {
                         });
                         edit.labelled_by(label.id);
                         found_ui(ui, &mut form.address, paired);
-                    }
-                    Mode::Listen => {
-                        theme::row(ui, "Bu bilgisayarın adresi", |ui| match local_ip {
-                            Some(ip) => {
-                                if theme::button(ui, "Kopyala", Kind::Ghost).clicked() {
-                                    ui.ctx().copy_text(ip.to_string());
-                                }
-                                ui.label(theme::semibold(ip.to_string()));
+                    });
+                }
+                Mode::Listen => {
+                    theme::row(ui, "Bu bilgisayarın adresi", |ui| match local_ip {
+                        Some(ip) => {
+                            if theme::button(ui, "Kopyala", Kind::Ghost).clicked() {
+                                ui.ctx().copy_text(ip.to_string());
                             }
-                            None => {
-                                ui.label(RichText::new("bulunamadı").weak());
-                            }
-                        });
-                        theme::divider(ui);
+                            ui.label(theme::semibold(ip.to_string()));
+                        }
+                        None => {
+                            ui.label(RichText::new("bulunamadı").weak());
+                        }
+                    });
+                    theme::divider(ui);
+                    ui.add_enabled_ui(enabled, |ui| {
                         let announce = "Ağda görünür ol";
                         theme::row(ui, announce, |ui| {
                             theme::switch(ui, &mut form.announce, announce)
                         });
-                    }
+                    });
                 }
-                theme::divider(ui);
+            }
+            theme::divider(ui);
+            ui.add_enabled_ui(enabled, |ui| {
                 theme::row(ui, "Diğer bilgisayar", |ui| {
                     theme::segmented(
                         ui,
@@ -691,6 +1008,16 @@ impl GuiApp {
                 });
                 slider.labelled_by(label.id);
                 theme::divider(ui);
+                let (label, slider) = theme::row(ui, "Kaydırma hızı", |ui| {
+                    ui.label(format!("{:.2}×", form.scroll_speed));
+                    ui.add(
+                        egui::Slider::new(&mut form.scroll_speed, 0.25..=4.0)
+                            .logarithmic(true)
+                            .show_value(false),
+                    )
+                });
+                slider.labelled_by(label.id);
+                theme::divider(ui);
                 let swap = "Ctrl ile Cmd yer değiştirsin";
                 theme::row(ui, swap, |ui| theme::switch(ui, &mut form.swap, swap));
                 theme::divider(ui);
@@ -707,8 +1034,49 @@ impl GuiApp {
                 theme::divider(ui);
                 let clip = "Pano paylaşımı";
                 theme::row(ui, clip, |ui| theme::switch(ui, &mut form.clipboard, clip));
+                // Only Windows can tell a trapped cursor from a free one.
+                if cfg!(windows) || cfg!(test) {
+                    theme::divider(ui);
+                    let game = "Oyunlarda ve tam ekranda geçiş";
+                    theme::row(ui, game, |ui| theme::switch(ui, &mut form.game_mode, game));
+                    ui.label(RichText::new(GAME_NOTE).small().weak());
+                }
             });
         });
+    }
+
+    /// macOS: the service that lets the other computer type the password.
+    fn login_screen_ui(&mut self, ui: &mut egui::Ui) {
+        let Some(installed) = self.login_agent else { return };
+        let p = Palette::of(ui);
+        let busy = self.login_job.is_some();
+        let mut pressed = false;
+        theme::section(ui, "Şifre ekranı");
+        theme::card(ui, |ui| {
+            theme::row(ui, "Şifre ekranında çalış", |ui| {
+                let (text, kind) =
+                    if installed { ("Kaldır", Kind::Ghost) } else { ("Kur", Kind::Secondary) };
+                pressed =
+                    ui.add_enabled_ui(!busy, |ui| theme::button(ui, text, kind)).inner.clicked();
+                let (status, color) = match (busy, installed) {
+                    (true, _) => ("şifre bekleniyor", p.muted),
+                    (false, true) => ("kurulu", p.green),
+                    (false, false) => ("kurulu değil", p.muted),
+                };
+                ui.label(RichText::new(status).small().color(color));
+            });
+            ui.label(RichText::new(LOGIN_NOTE).small().weak());
+            if self.login_misplaced {
+                ui.label(
+                    RichText::new("Önce uygulamayı Uygulamalar klasörüne taşıyın.")
+                        .small()
+                        .color(p.amber),
+                );
+            }
+        });
+        if pressed {
+            self.start_login_job(!installed);
+        }
     }
 
     fn app_ui(&mut self, ui: &mut egui::Ui) {
@@ -732,6 +1100,30 @@ impl GuiApp {
                 );
             }
             theme::divider(ui);
+            let launch = "Açılınca bağlantıyı başlat";
+            let mut on = self.form.start_on_launch;
+            let (_, switch) = theme::row(ui, launch, |ui| theme::switch(ui, &mut on, launch));
+            if switch.changed() {
+                self.form.start_on_launch = on;
+                self.save_settings();
+            }
+            theme::divider(ui);
+            let mut pref = self.form.window;
+            theme::row(ui, "Pencere boyutu", |ui| {
+                theme::segmented(
+                    ui,
+                    &mut pref,
+                    &[
+                        (Pref::Auto, "Otomatik"),
+                        (Pref::Compact, "Kompakt"),
+                        (Pref::Standard, "Standart"),
+                    ],
+                )
+            });
+            if pref != self.form.window {
+                self.set_window_pref(pref);
+            }
+            theme::divider(ui);
             let mut forget = false;
             theme::row(ui, &format!("Eşleşmiş bilgisayar: {}", self.paired.len()), |ui| {
                 let can_forget = !running && !self.paired.is_empty();
@@ -750,20 +1142,59 @@ impl GuiApp {
                 self.paired = paired_list(&self.data_dir);
             }
         });
+        theme::section(ui, "Uyandırma");
+        theme::card(ui, |ui| self.wake_row_ui(ui));
+    }
+
+    /// The other computer's network card, for waking it.
+    fn wake_row_ui(&mut self, ui: &mut egui::Ui) {
+        let p = Palette::of(ui);
+        let valid = self.form.wake_mac.trim().is_empty() || self.wake_mac().is_some();
+        let (label, edit) = theme::row(ui, "Uyandırma adresi (MAC)", |ui| {
+            theme::text_field(
+                ui,
+                &mut self.form.wake_mac,
+                "bağlanınca dolar",
+                170.0,
+                egui::TextStyle::Monospace,
+            )
+        });
+        let edit = edit.labelled_by(label.id);
+        if edit.lost_focus() && valid {
+            self.save_settings();
+        }
+        let note = if valid {
+            RichText::new(
+                "Mac: Sistem Ayarları > Enerji > Ağ erişimi için uyandır. \
+                 Windows: ağ kartında Wake on Magic Packet.",
+            )
+            .small()
+            .weak()
+        } else {
+            RichText::new("Adres AA:BB:CC:DD:EE:FF biçiminde olmalı.").small().color(p.red)
+        };
+        ui.label(note);
+        let label = "Başlayınca diğer bilgisayarı uyandır";
+        let mut on = self.form.wake_on_start;
+        let (_, switch) = theme::row(ui, label, |ui| theme::switch(ui, &mut on, label));
+        if switch.changed() {
+            self.form.wake_on_start = on;
+            self.save_settings();
+        }
     }
 
     fn log_ui(&self, ui: &mut egui::Ui) {
-        ui.add_space(10.0);
+        ui.add_space(theme::Metrics::of(ui).section_gap);
         theme::card(ui, |ui| {
             egui::CollapsingHeader::new("Günlük").default_open(false).show(ui, |ui| {
-                egui::ScrollArea::vertical().max_height(180.0).stick_to_bottom(true).show(
-                    ui,
-                    |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(theme::Metrics::of(ui).log_h)
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
                         for line in &self.view.log {
                             ui.label(RichText::new(line).monospace().small());
                         }
-                    },
-                );
+                    });
             });
         });
     }
@@ -791,21 +1222,29 @@ impl eframe::App for GuiApp {
     /// Also runs while the window is hidden in the tray.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll();
+        self.wake_at_start();
         self.tray_logic(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         theme::paint_backdrop(ui);
+        let m = theme::Metrics::of(ui);
         egui::Panel::bottom("footer")
             .show_separator_line(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(egui::Color32::from_black_alpha(70))
-                    .inner_margin(egui::Margin { left: 16, right: 16, top: 12, bottom: 10 }),
-            )
+            .frame(egui::Frame::new().fill(egui::Color32::from_black_alpha(70)).inner_margin(
+                egui::Margin {
+                    left: m.page_pad.0,
+                    right: m.page_pad.0,
+                    top: m.page_pad.1 - 2,
+                    bottom: m.page_pad.1 - 4,
+                },
+            ))
             .show(ui, |ui| self.footer_ui(ui));
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 14)))
+            .frame(
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(m.page_pad.0, m.page_pad.1)),
+            )
             .show(ui, |ui| {
                 self.header_ui(ui);
                 // Needed whichever page is open: a PIN question must not hide.
@@ -821,6 +1260,9 @@ impl eframe::App for GuiApp {
                     Page::Connection => self.connection_ui(ui),
                     Page::Settings => {
                         self.behavior_ui(ui);
+                        self.login_screen_ui(ui);
+                    }
+                    Page::App => {
                         self.app_ui(ui);
                         self.log_ui(ui);
                     }
@@ -846,6 +1288,23 @@ impl eframe::App for GuiApp {
     fn on_exit(&mut self) {
         self.running = None;
     }
+}
+
+/// Lays out a row of widgets centred in the available width.
+fn centered(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    // Measured on the first pass, centred from then on.
+    let id = ui.scope_id().with("centered-width");
+    let width: f32 = ui.ctx().data(|d| d.get_temp(id)).unwrap_or(0.0);
+    ui.horizontal(|ui| {
+        ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
+        let start = ui.cursor().min.x;
+        add(ui);
+        let used = ui.min_rect().right() - start;
+        if (used - width).abs() > 0.5 {
+            ui.ctx().data_mut(|d| d.insert_temp(id, used));
+            ui.ctx().request_repaint();
+        }
+    });
 }
 
 /// The computers heard on the network; picking one fills in its address.
@@ -887,6 +1346,12 @@ fn found_ui(ui: &mut egui::Ui, address: &mut String, paired: &[Fingerprint]) {
             ui.label(RichText::new(computer.addr.ip().to_string()).small().weak());
         });
     }
+}
+
+/// The window size the user chose last time, before the window exists.
+fn saved_window_pref(data_dir: &Path) -> Pref {
+    let file = config::load(&data_dir.join(SETTINGS_FILE)).unwrap_or_default();
+    Pref::parse(file.window_size.as_deref())
 }
 
 fn paired_list(dir: &Path) -> Vec<Fingerprint> {
@@ -992,6 +1457,45 @@ mod tests {
         assert!(harness.query_by_label("İmleç hızı").is_none());
     }
 
+    /// Every page fits its window without scrolling, in both sizes: the last
+    /// thing on each page ends above the button at the bottom.
+    #[test]
+    fn pages_fit_both_window_sizes() {
+        for pref in [Pref::Standard, Pref::Compact] {
+            let dir = temp_dir(&format!("fit-{}", pref.as_str()));
+            let density = window::density(pref, 0.0);
+            let (width, height) = window::size(density, 1080.0);
+            let app_dir = dir.clone();
+            let mut harness =
+                Harness::builder().with_size([width, height]).build_eframe(move |cc| {
+                    let mut app = GuiApp::new(cc.egui_ctx.clone(), app_dir, true);
+                    // Whatever the screen of the machine running the test is.
+                    app.apply_window_pref(pref, 1080.0);
+                    // The Mac-only card, the longest thing on its page.
+                    app.login_agent = Some(false);
+                    app.login_misplaced = true;
+                    app
+                });
+            harness.step();
+            let bottom = harness.get_by_label("Başlat").rect().top();
+            for (page, tab, last) in [
+                (Page::Connection, "Bağlantı", "Bu bilgisayarın adı"),
+                (Page::Settings, "Ayarlar", LOGIN_NOTE),
+                (Page::App, "Uygulama", "Günlük"),
+            ] {
+                harness.get_by_label(tab).click();
+                harness.run_steps(3);
+                assert_eq!(harness.state().page, page);
+                let end = harness
+                    .query_all_by_label(last)
+                    .map(|node| node.rect().bottom())
+                    .fold(f32::MIN, f32::max);
+                assert!(end <= bottom, "{pref:?} {tab}: {last} ends at {end}, button at {bottom}");
+            }
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
     /// Hovering a button changes its colour only: its size and place stay put.
     #[test]
     fn hover_does_not_move_widgets() {
@@ -1004,6 +1508,144 @@ mod tests {
             harness.run_steps(8);
             assert_eq!(harness.get_by_label(label).rect(), before, "{label} moved on hover");
         }
+    }
+
+    fn connected(harness: &mut Harness<'_, GuiApp>, os: Os) {
+        harness.state_mut().view.link = Some(LinkState::Connected {
+            peer: "Öteki".into(),
+            addr: "192.0.2.5:24800".parse().unwrap(),
+            os,
+            mac: Some([0x3C, 0x22, 0xFB, 0x0A, 0xB1, 0x07]),
+        });
+        harness.run_steps(3);
+    }
+
+    /// A Mac can be put to sleep or shut down; shutting down asks first and
+    /// warns that a Mac that is off cannot be woken.
+    #[test]
+    fn power_buttons_follow_the_other_computer() {
+        let dir = temp_dir("power");
+        let mut harness = harness(&dir);
+        connected(&mut harness, Os::MacOs);
+        harness.get_by_label("Uyut");
+        harness.get_by_label("Kapat").click();
+        harness.run_steps(3);
+        assert!(harness.state().confirm_shutdown);
+        harness.get_by_label("Öteki kapatılsın mı?");
+        harness.get_by_label_contains("Kapalı bir Mac ağdan uyandırılamaz");
+        harness.get_by_label("Vazgeç").click();
+        harness.run_steps(3);
+        assert!(!harness.state().confirm_shutdown);
+
+        // Windows: shutting down only.
+        connected(&mut harness, Os::Windows);
+        assert!(harness.query_by_label("Uyut").is_none());
+        harness.get_by_label("Kapat").click();
+        harness.run_steps(3);
+        assert!(harness.query_by_label_contains("Kapalı bir Mac").is_none());
+        harness.get_by_label("Evet, kapat");
+    }
+
+    /// The address the other computer sends is kept, and offers waking it
+    /// once it is gone.
+    #[test]
+    fn learned_address_offers_waking() {
+        let dir = temp_dir("wake");
+        let mut harness = harness(&dir);
+        harness.step();
+        assert!(harness.query_by_label("Diğer bilgisayarı uyandır").is_none());
+
+        harness.state_mut().learn_mac([0x3C, 0x22, 0xFB, 0x0A, 0xB1, 0x07]);
+        harness.run_steps(3);
+        harness.get_by_label("Diğer bilgisayarı uyandır");
+        let saved = config::load(&dir.join(SETTINGS_FILE)).unwrap();
+        assert_eq!(saved.wake_mac.as_deref(), Some("3C:22:FB:0A:B1:07"));
+
+        connected(&mut harness, Os::Windows);
+        assert!(harness.query_by_label("Diğer bilgisayarı uyandır").is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// With the switch on, starting wakes the other computer, again a few
+    /// times until it connects; stopping ends it.
+    #[test]
+    fn starting_wakes_the_other_computer() {
+        let dir = temp_dir("wake-start");
+        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let mut harness = harness(&dir);
+        let form = &mut harness.state_mut().form;
+        form.mode = Mode::Connect;
+        form.address = format!("127.0.0.1:{port}");
+        form.wake_mac = "3C:22:FB:0A:B1:07".into();
+        form.wake_on_start = true;
+        harness.step();
+        harness.get_by_label("Başlat").click();
+        harness.run_steps(2);
+        let woken = |app: &GuiApp| app.view.log.iter().any(|l| l.contains("Wake-on-LAN packet"));
+        assert!(woken(harness.state()));
+        assert_eq!(harness.state().wake_retry.map(|(_, left)| left), Some(WAKE_TRIES - 1));
+
+        harness.get_by_label("Durdur").click();
+        harness.run_steps(2);
+        assert!(harness.state().wake_retry.is_none());
+        let saved = config::load(&dir.join(SETTINGS_FILE)).unwrap();
+        assert_eq!(saved.wake_on_start, Some(true));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Opening the program starts sharing by itself, unless switched off.
+    #[test]
+    fn opening_starts_sharing() {
+        let dir = temp_dir("launch");
+        let mut harness = harness(&dir);
+        harness.state_mut().launched(false);
+        harness.step();
+        assert!(harness.state().running.is_some());
+        harness.get_by_label("Durdur");
+        harness.state_mut().stop();
+        harness.step();
+
+        harness.state_mut().form.start_on_launch = false;
+        harness.state_mut().launched(false);
+        harness.step();
+        assert!(harness.state().running.is_none());
+        // Started at login it shares whatever the setting says.
+        harness.state_mut().launched(true);
+        harness.step();
+        assert!(harness.state().running.is_some());
+        harness.state_mut().stop();
+
+        // Connecting needs an address or a paired computer: nothing to ask at launch.
+        harness.state_mut().form.start_on_launch = true;
+        harness.state_mut().form.mode = Mode::Connect;
+        harness.state_mut().form.address.clear();
+        harness.state_mut().launched(false);
+        assert!(harness.state().running.is_none());
+        assert!(harness.state().error.is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The game-mode switch is saved with the other settings and reaches the engine's settings.
+    #[test]
+    fn game_mode_is_saved_and_used() {
+        let dir = temp_dir("game");
+        let mut harness = harness(&dir);
+        harness.get_by_label("Ayarlar").click();
+        harness.run_steps(3);
+        assert!(!harness.state().form.game_mode);
+        // The row's label and its switch carry the same name: the switch comes last.
+        let switch = harness.query_all_by_label_contains("Oyunlarda ve tam ekranda geçiş").last();
+        switch.expect("the game-mode row").click();
+        harness.run_steps(2);
+        assert!(harness.state().form.game_mode);
+        harness.get_by_label_contains("0,8 sn");
+
+        harness.state_mut().save_settings();
+        let saved = config::load(&dir.join(SETTINGS_FILE)).unwrap();
+        assert_eq!(saved.game_mode, Some(true));
+        let flags = RunFlags { dry_run: true, ..RunFlags::default() };
+        assert!(config::resolve(saved, flags).unwrap().game_mode);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

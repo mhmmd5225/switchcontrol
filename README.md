@@ -6,7 +6,7 @@ Windows ↔ macOS arasında tek klavye ve mouse paylaşımı (ShareMouse benzeri
 
 Her gönderimde GitHub Actions programı gerçek Mac ve Windows makinelerinde derleyip test eder. Hazır dosyalar: GitHub'da depo > **Actions** > son yeşil çalışma > **Artifacts** (`SwitchControl-macOS`, `SwitchControl-Windows`). `v` ile başlayan bir sürüm etiketi (ör. `v0.2.0`) gönderilince aynı dosyalar **Releases** sayfasına da eklenir.
 
-- **Mac** (yalnızca Apple Silicon / M serisi): zip'i açın. Uygulama yerel imzalı ve internetten indirildiği için macOS ilk açılışı engeller: Finder'da sağ tık > **Aç** deyin ya da Terminal'de `xattr -dr com.apple.quarantine SwitchControl.app` çalıştırın. Her yeni sürümde Girdi İzleme ve Erişilebilirlik izinlerini yeniden verin (eski kaydı silip yenisini ekleyin).
+- **Mac** (yalnızca Apple Silicon / M serisi): zip'i açın. Uygulama yerel imzalı ve internetten indirildiği için macOS ilk açılışı engeller: Finder'da sağ tık > **Aç** deyin ya da Terminal'de `xattr -dr com.apple.quarantine SwitchControl.app` çalıştırın. Her yeni sürümde Girdi İzleme ve Erişilebilirlik izinlerini yeniden verin (eski kaydı silip yenisini ekleyin). `SwitchControl-macOS.pkg` yükleyicisi uygulamayı Uygulamalar'a koyar ve şifre ekranı hizmetini kurar (aşağıda).
 - **Windows**: zip'ten `switchcontrol.exe`'yi çıkarın. Çift tıklayınca yalnızca pencere açılır, arkada konsol açılmaz. Terminalden argümanla çalıştırınca (`switchcontrol --side right ...`) çıktı o terminale yazılır; ancak terminal programın bitmesini beklemediği için eşleştirme PIN'ini `--pin` ile verin. "Windows bilgisayarınızı korudu" uyarısı çıkarsa **Ek bilgi > Yine de çalıştır**.
 
 ## Pencere
@@ -24,11 +24,50 @@ Program argümansız açılınca (ör. Finder'dan çift tıklayınca) bir pencer
 
 Ayarlar *Başlat*'a basınca veri klasöründeki `settings.toml` dosyasına kaydedilir (`--config` ile aynı biçim).
 
+Pencere üç sekmedir: **Bağlantı** (kimin kime bağlandığı, güç düğmeleri), **Ayarlar** (hızlar, geçiş, pano, Mac'te şifre ekranı) ve **Uygulama** (otomatik başlama, pencere boyutu, uyandırma, eşleşmeler, günlük).
+
+**Açılır açılmaz bağlantı:** program açılınca kayıtlı ayarlarla bağlantıyı kendiliğinden başlatır (*Uygulama > Açılınca bağlantıyı başlat*, varsayılan açık); *Başlat*'a basmak gerekmez. *Durdur*'a basılırsa o oturumda yeniden başlamaz.
+
+**Pencere boyutu:** iki sabit boyut vardır: *Standart* (460×860) ve küçük ekranlar için *Kompakt* (420×640). *Otomatik*, ekranın ölçeklendirmeden sonraki yüksekliğine bakar (1000 mantıksal pikselden kısaysa Kompakt; ör. 1366×768 ya da 1080p'de %150); *Uygulama > Pencere boyutu* ile elle seçilir.
+
 ### Simge ve otomatik başlama
 
 Windows'ta bildirim alanında, Mac'te menü çubuğunda bir SwitchControl simgesi durur. Menüsünde durum, *Başlat/Durdur*, *Pencereyi göster* ve *Çıkış* vardır (Windows'ta simgeye sol tıklamak pencereyi açar). Pencereyi kapatmak programı kapatmaz, simgeye indirir; programdan çıkmak için simgenin menüsünden *Çıkış*'ı seçin.
 
-*Uygulama > Oturum açılınca başlat* açıksa SwitchControl oturum açılınca simge olarak başlar ve kayıtlı ayarlarla bağlanır. Windows'ta kullanıcının başlangıç kaydına (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`), Mac'te `~/Library/LaunchAgents/com.switchcontrol.app.plist` dosyasına yazılır. Uygulamayı başka bir klasöre taşırsanız anahtarı kapatıp yeniden açın.
+*Uygulama sekmesi > Oturum açılınca başlat* açıksa SwitchControl oturum açılınca simge olarak başlar ve kayıtlı ayarlarla bağlanır. Windows'ta kullanıcının başlangıç kaydına (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`), Mac'te `~/Library/LaunchAgents/com.switchcontrol.app.plist` dosyasına yazılır. Uygulamayı başka bir klasöre taşırsanız anahtarı kapatıp yeniden açın.
+
+### Şifre ekranında çalışma (Mac)
+
+Mac'te *Ayarlar > Şifre ekranında çalış > Kur* (bir kez yönetici şifresi ister) SwitchControl'ü kilit ekranında ve oturum açma ekranında da çalıştırır: Windows'un klavyesiyle Mac'in şifresi yazılabilir. Akış: Windows açılır, SwitchControl Mac'i uyandırır, Mac şifre ekranına gelir, şifre Windows klavyesinden yazılır.
+
+- Kilit ekranı (oturum açıkken ekran kilitlenince) için oturumdaki uygulama zaten çalışır; ayrı kurulum gerekmez.
+- Oturum açma ekranı için kurulum bir *launchd* ajanı (`/Library/LaunchAgents/com.switchcontrol.loginwindow.plist`) ekler. Ajan yalnızca oturum açma ekranında `switchcontrol --service` çalıştırır; kullanıcı oturum açınca durur ve pencereli uygulama devralır. Günlüğü `/var/log/switchcontrol.log`; `switchcontrol --service-status` durumu yazar.
+- Hizmet yalnızca alır (klavye/fare yakalamaz), eşleştirme yapmaz: bilgisayarlar önceden pencereden eşleşmiş olmalıdır. Kimlik ve eşleşmeler bu yüzden Mac'te `/Library/Application Support/SwitchControl` klasörünü kullanır (kurulumda mevcut olanlar buraya taşınır; yönetici grubu yazabilir).
+- Uygulama Uygulamalar klasöründe olmalı. İsterseniz `SwitchControl-macOS.pkg` yükleyicisi uygulamayı oraya koyar ve hizmeti kurar (imzasız olduğu için ilk açılışta sağ tık > **Aç**).
+- **Sınırlar:** macOS bu ekranlarda yazılımın gönderdiği girdiyi kabul etmeyebilir (gerçek Mac'te denenmelidir). FileVault açıksa bilgisayar yeniden başlatıldıktan sonraki ilk disk açma ekranında ağ yoktur; orada hiçbir yazılım çalışmaz. Uykudan uyanıp kilit ekranına gelmek çalışabilir.
+
+### Oyunlarda ve tam ekranda geçiş (Windows)
+
+Oyunlar ve tam ekran uygulamalar imleci penceresine kilitler ya da her karede ekranın ortasına çeker; imleç ekran kenarına hiç ulaşmadığı için geçiş olmaz. *Ayarlar > Oyunlarda ve tam ekranda geçiş* açıksa SwitchControl fare hareketini ham girdiden (raw input) de okur: fare hareket ediyor ama imleç gelmiyorsa imleç sıkışmış sayılır ve sanal bir imleç, gerçek fare hareketiyle ekran kenarına itilir. Kenara yaklaşık **0,8 saniye** (ya da *Geçiş* ayarı daha uzunsa o kadar) itilince diğer bilgisayara geçilir. Normal masaüstünde hiçbir şey değişmez; sıkışma yoksa sanal imleç devreye girmez. Düğme basılıyken (ör. ateş ederken) geçilmez.
+
+- Varsayılan **kapalı**: birinci şahıs oyunlarda kamerayı sürekli aynı yöne çevirmek sanal imleci kenara iter ve yanlışlıkla geçebilir. Olursa **Ctrl+Alt+Shift+Esc** kontrolü geri getirir.
+- Kontrol karşıdayken oyunun kendi kilidi kaldırılır (`ClipCursor`), ama bazı oyunlar ham girdiyi kanca engellese de almaya devam edebilir (oyun kamerası kımıldar).
+- Yönetici olarak çalışan oyunlar ve global kanca engelleyen bazı hile korumaları bu yöntemi de engelleyebilir.
+- Komut satırında `--game-mode`. Mac'te (oyun Mac'teyken) bu seçenek şimdilik etkisizdir.
+
+### Uyutma, kapatma, uyandırma
+
+Bağlıyken *Bağlantı* sayfasındaki durum kartında diğer bilgisayar için düğmeler çıkar: Mac için *Uyut* ve *Kapat*, Windows için *Kapat* (kapatmadan önce sorulur). Mac `pmset sleepnow` ile uyur, `System Events` ile kapanır (macOS ilk seferde bu izni sorar); Windows `shutdown /s /t 0` ile kapanır. Kaydedilmemiş işi olan uygulamalar kapanmayı durdurabilir.
+
+Bağlanınca her iki taraf diğerine bağlantıda kullandığı ağ kartının MAC adresini bildirir; adres *Uygulama sekmesi > Uyandırma adresi* alanına yazılır (elle de girilebilir). Bağlı değilken durum kartındaki *Diğer bilgisayarı uyandır* düğmesi yerel ağa Wake-on-LAN paketi gönderir; aynı komutlar simgenin menüsünde de vardır. Uyandırmanın çalışması için:
+
+- **Mac mini:** Sistem Ayarları > Enerji > *Ağ erişimi için uyandır* açık olmalı. Mac yalnızca uykudan uyanır; kapatılmış bir Mac ağdan açılamaz.
+- **Windows (uykudan):** Aygıt Yöneticisi > ağ kartı > *Güç Yönetimi*'nde *Bu aygıtın bilgisayarı uyandırmasına izin ver* ve *Yalnızca sihirli paket…* açık; *Gelişmiş*'te *Wake on Magic Packet* etkin olmalı.
+- **Windows (kapalıyken):** ayrıca Denetim Masası > Güç Seçenekleri'nde *Hızlı başlatmayı aç* kapalı ve BIOS/UEFI'de *Wake on LAN* (ya da *Power On by PCI-E*) açık olmalı.
+
+*Uygulama sekmesi > Başlayınca diğer bilgisayarı uyandır* açıksa SwitchControl her başladığında (oturum açılınca kendiliğinden başladığında da) diğer bilgisayara uyandırma paketi gönderir; bağlanana kadar 10 saniye arayla toplam 4 kez dener. Örneğin Windows'ta açılınca uyuyan Mac'i uyandırmak için Windows tarafında açın.
+
+Kablolu bağlantı önerilir; Wi-Fi üzerinden uyandırma çoğu zaman çalışmaz. Bu özellik için iki bilgisayarda da aynı sürüm gerekir (protokol 4).
 
 ### Mac uygulaması
 
@@ -68,8 +107,11 @@ switchcontrol --side left --connect 192.168.1.20
 | `--connect ADDR` | Diğerine bağlan; port verilmezse 24800 |
 | `--name NAME` | Karşıya gösterilen ad (varsayılan bilgisayar adı) |
 | `--speed F` | Karşı ekrandaki imleç hızı çarpanı (varsayılan 1.0) |
+| `--scroll-speed F` | Karşı ekrandaki kaydırma hızı çarpanı (varsayılan 1.0); penceredeki karşılığı *Ayarlar > Kaydırma hızı* |
+| `--game-mode` | Oyun ya da tam ekran uygulama imleci kilitlese de kenara itince geçiş (Windows) |
 | `--no-swap` | Ctrl ↔ Cmd/Win değişimini kapat |
 | `--no-clipboard` | Pano paylaşımını kapat |
+| `--wake MAC` | Yalnızca bu MAC adresine Wake-on-LAN paketi gönderip çıkar |
 | `--no-announce` | Bekleyen tarafta kendini yerel ağda duyurma |
 | `--edge-delay MS` | Geçmeden önce imlecin kenara bu kadar milisaniye itilmesini bekle (varsayılan 0) |
 | `--config FILE` | Aynı ayarları TOML dosyasından oku (`side = "right"`, `connect = "..."`); komut satırı önceliklidir |

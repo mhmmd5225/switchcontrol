@@ -21,6 +21,7 @@ use crate::engine::AppEvent;
 use crate::identity::{Fingerprint, TrustStore};
 use crate::pairing::{self, Role};
 use crate::tls::{Secure, SecureReader, TlsConfig};
+use crate::wake;
 
 const PEER_TIMEOUT: Duration = Duration::from_secs(5);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -61,6 +62,9 @@ pub struct NetContext {
     pub tls: TlsConfig,
     pub trust: Arc<Mutex<TrustStore>>,
     pub pin: PinSource,
+    /// Whether an unpaired computer may pair (with a PIN). Off in the service,
+    /// where nobody can read or type a PIN.
+    pub pairing: bool,
 }
 
 /// Where the connecting side gets the PIN when pairing.
@@ -301,6 +305,11 @@ fn session(
     };
     let pairing = !(trusted && peer_trusts);
     if pairing {
+        if !ctx.pairing {
+            return Err(io::Error::other(
+                "not paired yet: pair the two computers in the SwitchControl window first",
+            ));
+        }
         if !pairing_allowed {
             return Err(io::Error::other(
                 "too many wrong PINs; restart switchcontrol to pair again",
@@ -331,7 +340,9 @@ fn session(
         secure.socket().set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
     }
 
-    write_frame(&mut writer, &Message::Hello(hello.clone()))?;
+    // The card this connection uses is the one the peer can wake us through.
+    let mac = secure.socket().local_addr().ok().and_then(|local| wake::mac_for(local.ip()));
+    write_frame(&mut writer, &Message::Hello(Hello { mac, ..hello.clone() }))?;
     let peer = match read_frame(&mut reader)? {
         Message::Hello(peer) => peer,
         other => return Err(invalid(format!("expected Hello, got {other:?}"))),

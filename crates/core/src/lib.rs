@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use sc_keymap::swap_ctrl_gui;
-use sc_proto::{Hello, InputEvent, Message, MouseButton, Os, PROTOCOL_VERSION, Rect};
+use sc_proto::{Hello, InputEvent, Message, MouseButton, Os, PROTOCOL_VERSION, Power, Rect};
 
 pub use layout::Side;
 use layout::{clamp_to_screens, map_span, on_edge};
@@ -28,10 +28,29 @@ pub struct Config {
     pub swap_ctrl_cmd: bool,
     /// Multiplier for motion sent to the peer.
     pub speed: f64,
+    /// Multiplier for scrolling sent to the peer.
+    pub scroll_speed: f64,
     /// How long the cursor must keep pushing against the edge before control
     /// passes to the peer; zero crosses on touch.
     pub edge_delay: Duration,
+    /// Cross to the peer even while a game or full-screen app keeps the
+    /// cursor from reaching the edge: see [`Node`]'s `trap`.
+    pub game_mode: bool,
 }
+
+/// How long a trapped cursor must keep pushing against the edge, at least.
+/// Longer than the usual delay: turning the camera in a game must not cross.
+pub const GAME_PUSH: Duration = Duration::from_millis(800);
+/// Mouse motion, in device counts, that makes up one stretch to judge: did the
+/// cursor follow it?
+const TRAP_MOTION: f64 = 20.0;
+/// A stretch counts as trapped when the cursor got less than this fraction of
+/// the motion (pointer acceleration alone does not get that low).
+const TRAP_FOLLOW: f64 = 1.0 / 8.0;
+/// Trapped stretches in a row before the cursor is taken for trapped.
+const TRAP_STRETCHES: u8 = 3;
+/// How far from where it was trapped the cursor must get to be free again.
+const TRAP_RELEASE: f64 = 60.0;
 
 /// Distance from the shared edge (in screen units) at which the edge bar starts to show.
 pub const EDGE_NEAR: i32 = 64;
@@ -67,6 +86,8 @@ pub enum Action {
     ShareClipboard,
     /// The peer shared its clipboard text: put it on this machine's clipboard.
     SetClipboard(String),
+    /// The peer asked this computer to sleep or shut down.
+    Power(Power),
     Log(String),
 }
 
@@ -87,8 +108,30 @@ struct Peer {
     screens: Vec<Rect>,
 }
 
+/// Game mode: telling whether the cursor follows the mouse.
+///
+/// A game or full-screen app can clip the cursor to its window or pull it back
+/// to the centre every frame, so the cursor never reaches the screen edge. The
+/// raw mouse motion still arrives. When the mouse moves and the cursor does
+/// not follow, the cursor is trapped: a virtual one, moved by the raw motion
+/// and held inside the screens, is pushed against the edge in its place.
+#[derive(Debug, Default)]
+struct Trap {
+    /// Where the real cursor was when the current stretch began.
+    stretch_start: Option<(i32, i32)>,
+    /// Mouse motion since then.
+    motion: (f64, f64),
+    /// Stretches in a row in which the mouse moved and the cursor did not.
+    stuck: u8,
+    /// Where the cursor would be had it followed the mouse; only while trapped.
+    virtual_cursor: Option<(f64, f64)>,
+    /// Where the real cursor was trapped.
+    anchor: (i32, i32),
+}
+
 pub struct Node {
     config: Config,
+    trap: Trap,
     os: Os,
     name: String,
     screens: Vec<Rect>,
@@ -100,6 +143,8 @@ pub struct Node {
     edge_since: Option<Instant>,
     /// The edge bar as last reported.
     edge_hint: Option<EdgeHint>,
+    /// Scaled wheel motion below one unit, carried over.
+    wheel_rest: (f64, f64),
     /// Buttons we pressed on the peer and have not released yet.
     forwarded_buttons: BTreeSet<MouseButton>,
     /// Whether the peer is currently driving this machine.
@@ -115,6 +160,7 @@ impl Node {
     pub fn new(config: Config, os: Os, name: String, screens: Vec<Rect>) -> Self {
         Node {
             config,
+            trap: Trap::default(),
             os,
             name,
             screens,
@@ -123,6 +169,7 @@ impl Node {
             local_buttons: BTreeSet::new(),
             edge_since: None,
             edge_hint: None,
+            wheel_rest: (0.0, 0.0),
             forwarded_buttons: BTreeSet::new(),
             controlled: false,
             injected_keys: BTreeSet::new(),
@@ -137,6 +184,7 @@ impl Node {
             name: self.name.clone(),
             os: self.os,
             screens: self.screens.clone(),
+            mac: None,
         }
     }
 
@@ -189,7 +237,12 @@ impl Node {
 
         match self.mode {
             Mode::Local => match ev {
-                InputEvent::MouseMove { x, y } => self.maybe_enter(x, y, now, &mut out),
+                InputEvent::MouseMove { x, y } => {
+                    if self.cursor_follows(x, y) {
+                        self.maybe_enter(x, y, now, &mut out);
+                    }
+                }
+                InputEvent::MouseDelta { dx, dy } => self.mouse_moved(dx, dy, now, &mut out),
                 // A drag hides the bar: it cannot cross.
                 InputEvent::Button { down: true, .. } => {
                     self.edge_since = None;
@@ -203,7 +256,12 @@ impl Node {
                     set(&mut self.forwarded_buttons, button, down);
                     out.push(Action::Send(Message::Button { button, down }));
                 }
-                InputEvent::Wheel { dx, dy } => out.push(Action::Send(Message::Wheel { dx, dy })),
+                InputEvent::Wheel { dx, dy } => {
+                    let (dx, dy) = self.scale_wheel(dx, dy);
+                    if dx != 0 || dy != 0 {
+                        out.push(Action::Send(Message::Wheel { dx, dy }));
+                    }
+                }
                 InputEvent::Key { usage, down } => {
                     out.push(Action::Send(Message::Key { usage, down }))
                 }
@@ -237,6 +295,12 @@ impl Node {
             }
             Message::ReleaseAll => self.release_injected(&mut out),
             Message::Clipboard { text } => out.push(Action::SetClipboard(text)),
+            Message::Power(power) => {
+                // Nothing may stay held down across the sleep.
+                self.release_injected(&mut out);
+                self.controlled = false;
+                out.push(Action::Power(power));
+            }
             _ if !self.controlled => {}
             Message::MouseMove { x, y } => out.push(Action::Inject(InputEvent::MouseMove { x, y })),
             Message::Button { button, down } => {
@@ -275,7 +339,84 @@ impl Node {
         out
     }
 
+    /// Game mode: takes in raw mouse motion while the cursor is local. Once
+    /// the cursor is trapped, the motion moves the virtual cursor.
+    fn mouse_moved(&mut self, dx: i32, dy: i32, now: Instant, out: &mut Vec<Action>) {
+        if !self.config.game_mode {
+            return;
+        }
+        let Some((x, y)) = self.trap.virtual_cursor else {
+            self.trap.motion.0 += f64::from(dx);
+            self.trap.motion.1 += f64::from(dy);
+            return;
+        };
+        let (x, y) = self.clamp_to_desktop(x + f64::from(dx), y + f64::from(dy));
+        self.trap.virtual_cursor = Some((x, y));
+        let delay = self.config.edge_delay.max(GAME_PUSH);
+        self.enter_when_pushed(x as i32, y as i32, now, delay, out);
+    }
+
+    /// Game mode: takes in where the real cursor is. Returns whether it
+    /// should decide about crossing (it does unless it is trapped).
+    fn cursor_follows(&mut self, x: i32, y: i32) -> bool {
+        if !self.config.game_mode {
+            return true;
+        }
+        let trap = &mut self.trap;
+        if trap.virtual_cursor.is_some() {
+            let (ax, ay) = trap.anchor;
+            let away = f64::from(x - ax).hypot(f64::from(y - ay));
+            if away > TRAP_RELEASE {
+                // The app let go of the cursor: it is a real one again.
+                *trap = Trap::default();
+                return true;
+            }
+            return false;
+        }
+        // Net distance, not path: a game that pulls the cursor back to the
+        // centre makes it wiggle, but it gets nowhere.
+        let (sx, sy) = *trap.stretch_start.get_or_insert((x, y));
+        let motion = trap.motion.0.hypot(trap.motion.1);
+        if motion < TRAP_MOTION {
+            return true;
+        }
+        let followed = f64::from(x - sx).hypot(f64::from(y - sy));
+        trap.stuck = if followed < motion * TRAP_FOLLOW { trap.stuck + 1 } else { 0 };
+        trap.stretch_start = Some((x, y));
+        trap.motion = (0.0, 0.0);
+        if trap.stuck >= TRAP_STRETCHES {
+            trap.anchor = (x, y);
+            trap.virtual_cursor = Some((f64::from(x), f64::from(y)));
+            trap.stuck = 0;
+            return false;
+        }
+        true
+    }
+
+    /// The virtual cursor held inside the bounding box of the screens.
+    fn clamp_to_desktop(&self, x: f64, y: f64) -> (f64, f64) {
+        let left = self.screens.iter().map(|r| r.left).min().unwrap_or(0);
+        let top = self.screens.iter().map(|r| r.top).min().unwrap_or(0);
+        let right = self.screens.iter().map(|r| r.right).max().unwrap_or(1) - 1;
+        let bottom = self.screens.iter().map(|r| r.bottom).max().unwrap_or(1) - 1;
+        (x.clamp(f64::from(left), f64::from(right)), y.clamp(f64::from(top), f64::from(bottom)))
+    }
+
     fn maybe_enter(&mut self, x: i32, y: i32, now: Instant, out: &mut Vec<Action>) {
+        let delay = self.config.edge_delay;
+        self.enter_when_pushed(x, y, now, delay, out);
+    }
+
+    /// Crosses to the peer once the cursor at (x, y) has pushed against the
+    /// shared edge for `delay`.
+    fn enter_when_pushed(
+        &mut self,
+        x: i32,
+        y: i32,
+        now: Instant,
+        delay: Duration,
+        out: &mut Vec<Action>,
+    ) {
         let Some(peer) = &self.peer else { return };
         let side = self.config.peer_side;
         let (Some(from), Some(to), Some(peer_x), Some(edge)) = (
@@ -295,7 +436,6 @@ impl Node {
             return;
         }
 
-        let delay = self.config.edge_delay;
         if !delay.is_zero() {
             let pushed = now.saturating_duration_since(*self.edge_since.get_or_insert(now));
             if pushed < delay {
@@ -314,6 +454,7 @@ impl Node {
         out.push(Action::Send(Message::Enter { x: peer_x, y: peer_y }));
         out.push(Action::Log(format!("-> {} at ({peer_x}, {peer_y})", self.peer_name())));
         self.mode = Mode::Remote { x: peer_x as f64, y: peer_y as f64 };
+        self.trap = Trap::default();
     }
 
     /// The bar for a cursor at (x, y), if it is close to the shared edge.
@@ -382,8 +523,19 @@ impl Node {
 
     /// Returns control to this machine. With `peer_y`, the local cursor is
     /// placed at the matching height just inside our edge facing the peer.
+    /// Applies the scroll speed, keeping fractions for the next notch.
+    fn scale_wheel(&mut self, dx: i32, dy: i32) -> (i32, i32) {
+        let speed = self.config.scroll_speed;
+        let x = self.wheel_rest.0 + dx as f64 * speed;
+        let y = self.wheel_rest.1 + dy as f64 * speed;
+        let (sx, sy) = (x.trunc(), y.trunc());
+        self.wheel_rest = (x - sx, y - sy);
+        (sx as i32, sy as i32)
+    }
+
     fn leave_remote(&mut self, out: &mut Vec<Action>, notify: bool, peer_y: Option<i32>) {
         self.mode = Mode::Local;
+        self.trap = Trap::default();
         self.forwarded_buttons.clear();
         if notify {
             out.push(Action::Send(Message::Leave));

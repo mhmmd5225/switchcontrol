@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::identity;
 use crate::pairing::normalize_pin;
 
+/// The settings file in the data folder, in the same format `--config` reads.
+pub const SETTINGS_FILE: &str = "settings.toml";
+
 pub const USAGE: &str = "\
 usage: switchcontrol --side left|right [--listen ADDR | --connect ADDR] [options]
 
@@ -18,7 +21,10 @@ usage: switchcontrol --side left|right [--listen ADDR | --connect ADDR] [options
   --connect ADDR      connect to the peer, e.g. 192.168.1.20 or 192.168.1.20:24800
   --name NAME         name shown to the peer (default: computer name)
   --speed F           pointer speed on the peer (default 1.0)
+  --scroll-speed F    scrolling speed on the peer (default 1.0)
   --no-swap           keep Ctrl and Cmd/Win as they are
+  --game-mode         cross to the peer by pushing against the edge even while a game
+                      or full-screen app keeps the cursor from reaching it (Windows)
   --edge-delay MS     push against the edge this long before crossing (default 0)
   --no-clipboard      do not share clipboard text with the other computer
   --no-announce       do not make this computer visible on the local network
@@ -28,6 +34,9 @@ usage: switchcontrol --side left|right [--listen ADDR | --connect ADDR] [options
   --forget-peers      remove all paired computers, then continue
   --dry-run           no capture or injection; log what would be injected
   -v, --verbose       log every message sent and received
+
+       switchcontrol --wake AA:BB:CC:DD:EE:FF
+  sends a Wake-on-LAN packet to that network card and exits
 
 The first connection between two computers needs pairing: the listening side
 shows a 6-digit PIN, which is entered on the connecting side.
@@ -47,7 +56,10 @@ pub struct Settings {
     pub net: NetMode,
     pub swap_ctrl_cmd: bool,
     pub speed: f64,
+    pub scroll_speed: f64,
     pub edge_delay: Duration,
+    /// Cross even while a game traps the cursor, by pushing the mouse.
+    pub game_mode: bool,
     /// Share clipboard text when control passes between the computers.
     pub clipboard: bool,
     /// While listening, announce this computer on the local network.
@@ -57,6 +69,10 @@ pub struct Settings {
     pub forget_peers: bool,
     pub dry_run: bool,
     pub verbose: bool,
+    /// Only receive: no keyboard or mouse capture (the background service).
+    pub no_capture: bool,
+    /// Never offer pairing: only computers already paired may connect.
+    pub no_pairing: bool,
 }
 
 /// The TOML file uses the long flag names, e.g. `side = "right"`.
@@ -69,12 +85,23 @@ pub struct FileConfig {
     pub listen: Option<String>,
     pub connect: Option<String>,
     pub speed: Option<f64>,
+    pub scroll_speed: Option<f64>,
     pub swap_ctrl_cmd: Option<bool>,
     pub edge_delay_ms: Option<u64>,
     pub clipboard: Option<bool>,
     pub announce: Option<bool>,
     /// Draw a bar at the shared edge when the cursor comes near (window only).
     pub edge_bar: Option<bool>,
+    /// The other computer's network card, for waking it (window only).
+    pub wake_mac: Option<String>,
+    /// Cross by pushing even while a game or full-screen app traps the cursor.
+    pub game_mode: Option<bool>,
+    /// Wake the other computer whenever sharing starts, e.g. at login (window only).
+    pub wake_on_start: Option<bool>,
+    /// Start sharing as soon as the window program opens (window only).
+    pub start_on_launch: Option<bool>,
+    /// Window size: "auto", "compact" or "standard" (window only).
+    pub window_size: Option<String>,
     pub data_dir: Option<PathBuf>,
 }
 
@@ -104,7 +131,13 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
                 let raw = value()?;
                 cli.speed = Some(raw.parse().map_err(|_| format!("--speed: not a number: {raw}"))?);
             }
+            "--scroll-speed" => {
+                let raw = value()?;
+                cli.scroll_speed =
+                    Some(raw.parse().map_err(|_| format!("--scroll-speed: not a number: {raw}"))?);
+            }
             "--no-swap" => cli.swap_ctrl_cmd = Some(false),
+            "--game-mode" => cli.game_mode = Some(true),
             "--no-clipboard" => cli.clipboard = Some(false),
             "--no-announce" => cli.announce = Some(false),
             "--edge-delay" => {
@@ -140,11 +173,17 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
         listen,
         connect,
         speed: cli.speed.or(file.speed),
+        scroll_speed: cli.scroll_speed.or(file.scroll_speed),
         swap_ctrl_cmd: cli.swap_ctrl_cmd.or(file.swap_ctrl_cmd),
         edge_delay_ms: cli.edge_delay_ms.or(file.edge_delay_ms),
         clipboard: cli.clipboard.or(file.clipboard),
         announce: cli.announce.or(file.announce),
         edge_bar: file.edge_bar,
+        wake_mac: file.wake_mac,
+        game_mode: cli.game_mode.or(file.game_mode),
+        wake_on_start: file.wake_on_start,
+        start_on_launch: file.start_on_launch,
+        window_size: file.window_size,
         data_dir: cli.data_dir.or(file.data_dir),
     };
     resolve(merged, flags)
@@ -168,6 +207,10 @@ pub fn resolve(config: FileConfig, flags: RunFlags) -> Result<Settings, String> 
     if !(speed > 0.0 && speed <= 10.0) {
         return Err(format!("speed must be in (0, 10], not {speed}"));
     }
+    let scroll_speed = config.scroll_speed.unwrap_or(1.0);
+    if !(scroll_speed > 0.0 && scroll_speed <= 10.0) {
+        return Err(format!("scroll speed must be in (0, 10], not {scroll_speed}"));
+    }
     let edge_delay_ms = config.edge_delay_ms.unwrap_or(0);
     if edge_delay_ms > 5000 {
         return Err(format!("edge delay must be at most 5000 ms, not {edge_delay_ms}"));
@@ -179,7 +222,9 @@ pub fn resolve(config: FileConfig, flags: RunFlags) -> Result<Settings, String> 
         net,
         swap_ctrl_cmd: config.swap_ctrl_cmd.unwrap_or(true),
         speed,
+        scroll_speed,
         edge_delay: Duration::from_millis(edge_delay_ms),
+        game_mode: config.game_mode.unwrap_or(false),
         clipboard: config.clipboard.unwrap_or(true),
         announce: config.announce.unwrap_or(true),
         pin: flags.pin,
@@ -187,6 +232,8 @@ pub fn resolve(config: FileConfig, flags: RunFlags) -> Result<Settings, String> 
         forget_peers: flags.forget_peers,
         dry_run: flags.dry_run,
         verbose: flags.verbose,
+        no_capture: false,
+        no_pairing: false,
     })
 }
 
@@ -252,6 +299,15 @@ mod tests {
     }
 
     #[test]
+    fn game_mode_is_off_unless_asked_for() {
+        assert!(!parse("--side right").unwrap().game_mode);
+        assert!(parse("--side right --game-mode").unwrap().game_mode);
+        let file =
+            FileConfig { side: Some("left".into()), game_mode: Some(true), ..Default::default() };
+        assert!(resolve(file, RunFlags::default()).unwrap().game_mode);
+    }
+
+    #[test]
     fn connect_adds_default_port() {
         let s = parse("--side left --connect 192.168.1.20 --no-swap --speed 1.5 --edge-delay 300")
             .unwrap();
@@ -259,6 +315,7 @@ mod tests {
         assert_eq!(s.net, NetMode::Connect("192.168.1.20:24800".into()));
         assert!(!s.swap_ctrl_cmd);
         assert_eq!(s.speed, 1.5);
+        assert_eq!(parse("--side left --scroll-speed 0.5").unwrap().scroll_speed, 0.5);
     }
 
     #[test]
@@ -276,6 +333,7 @@ mod tests {
         assert!(parse("--side up").is_err());
         assert!(parse("--side left --listen :1 --connect x").is_err());
         assert!(parse("--side left --speed 0").is_err());
+        assert!(parse("--side left --scroll-speed 0").is_err());
         assert!(parse("--side left --edge-delay 9000").is_err());
         assert!(parse("--side left --edge-delay -1").is_err());
         assert!(parse("--side left --bogus").is_err());

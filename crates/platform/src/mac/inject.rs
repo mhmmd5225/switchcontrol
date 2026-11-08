@@ -116,9 +116,11 @@ impl Injector {
     }
 
     fn wheel(&mut self, dx: i32, dy: i32) -> io::Result<()> {
+        // A notch from Windows (120) scrolls 3 lines here, as it would there.
+        let per_line = sc_proto::WHEEL_PER_LINE;
         let (rest_x, rest_y) = (self.wheel_rest.0 + dx, self.wheel_rest.1 + dy);
-        let (lines_x, lines_y) = (rest_x / 120, rest_y / 120);
-        self.wheel_rest = (rest_x - lines_x * 120, rest_y - lines_y * 120);
+        let (lines_x, lines_y) = (rest_x / per_line, rest_y / per_line);
+        self.wheel_rest = (rest_x - lines_x * per_line, rest_y - lines_y * per_line);
         if lines_x == 0 && lines_y == 0 {
             return Ok(());
         }

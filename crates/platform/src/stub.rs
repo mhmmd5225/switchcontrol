@@ -21,6 +21,10 @@ pub fn permissions() -> Permissions {
     Permissions { listen: true, post: true }
 }
 
+pub fn screen_scale() -> f32 {
+    1.0
+}
+
 pub fn monitors() -> Vec<Monitor> {
     vec![Monitor {
         name: "virtual".into(),
@@ -53,6 +57,8 @@ impl Capture {
     pub fn is_grabbing(&self) -> bool {
         false
     }
+
+    pub fn set_game_mode(&self, _on: bool) {}
 }
 
 #[derive(Default)]

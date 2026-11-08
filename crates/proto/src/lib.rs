@@ -14,8 +14,13 @@ use std::io::{self, Read, Write};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 pub const DEFAULT_PORT: u16 = 24800;
+
+/// Wheel units per line of scrolling. A wheel notch is 120 units, which
+/// Windows scrolls by 3 lines by default; macOS reports and takes scrolling
+/// in lines, so one line there is one line on the other side.
+pub const WHEEL_PER_LINE: i32 = 40;
 
 /// Longest clipboard text shared, in bytes.
 pub const MAX_CLIPBOARD: usize = 1024 * 1024;
@@ -91,8 +96,8 @@ pub enum InputEvent {
         button: MouseButton,
         down: bool,
     },
-    /// Wheel motion, 120 per notch. Positive `dy` scrolls away from the user,
-    /// positive `dx` scrolls right.
+    /// Wheel motion, 120 per notch ([`WHEEL_PER_LINE`] per line). Positive
+    /// `dy` scrolls away from the user, positive `dx` scrolls right.
     Wheel {
         dx: i32,
         dy: i32,
@@ -110,6 +115,16 @@ pub struct Hello {
     pub name: String,
     pub os: Os,
     pub screens: Vec<Rect>,
+    /// Hardware address of the network card the connection uses, so the
+    /// peer can wake this computer with a Wake-on-LAN packet.
+    pub mac: Option<[u8; 6]>,
+}
+
+/// What one computer can ask the other to do with its power.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Power {
+    Sleep,
+    Shutdown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +163,8 @@ pub enum Message {
     Clipboard {
         text: String,
     },
+    /// The receiver should go to sleep or shut down.
+    Power(Power),
 }
 
 /// Frames exchanged right after the TLS handshake, before [`Message::Hello`].
@@ -197,6 +214,7 @@ mod tests {
                 name: "mac".into(),
                 os: Os::MacOs,
                 screens: vec![Rect { left: 0, top: 0, right: 1512, bottom: 982 }],
+                mac: Some([0x3c, 0x22, 0xfb, 0x01, 0x02, 0x03]),
             }),
             Message::Enter { x: 0, y: -40 },
             Message::MouseMove { x: 1511, y: 981 },
@@ -206,6 +224,8 @@ mod tests {
             Message::Leave,
             Message::ReleaseAll,
             Message::Ping,
+            Message::Power(Power::Sleep),
+            Message::Power(Power::Shutdown),
         ];
         let mut wire = Vec::new();
         for msg in &messages {
