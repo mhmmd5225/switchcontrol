@@ -109,13 +109,16 @@ impl Shared {
     /// Sleeps up to `time`; false if asked to stop meanwhile.
     fn pause(&self, time: Duration) -> bool {
         let end = Instant::now() + time;
-        while Instant::now() < end {
+        loop {
             if self.stopping() {
                 return false;
             }
-            thread::sleep(POLL.min(end - Instant::now()));
+            let remaining = end.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return true;
+            }
+            thread::park_timeout(remaining);
         }
-        !self.stopping()
     }
 }
 
@@ -128,6 +131,7 @@ impl NetHandle {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
         if let Some(thread) = self.thread.take() {
+            thread.thread().unpark();
             let _ = thread.join();
         }
     }
@@ -212,7 +216,9 @@ pub fn spawn(
                     Role::Server => {
                         pairing_failures += 1;
                         // Slows down anyone guessing PINs.
-                        thread::sleep(RETRY_DELAY);
+                        if !shared.pause(RETRY_DELAY) {
+                            return;
+                        }
                         NetEvent::Log(format!(
                             "pairing failed: {e} ({pairing_failures}/{MAX_PAIRING_FAILURES})"
                         ))

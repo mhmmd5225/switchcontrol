@@ -56,6 +56,21 @@ impl Strip {
     fn size(&self) -> egui::Vec2 {
         egui::vec2(WIDTH, (self.bottom - self.top) as f32 / self.scale)
     }
+
+    fn fit_to_viewport(mut self, ctx: &egui::Context) -> Self {
+        // The edge may be on a different monitor than the main window. Use the
+        // overlay's own scale for conversions to and from physical pixels.
+        self.scale = ctx.pixels_per_point();
+        let (outer, inner) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().inner_rect));
+        let tolerance = 1.0 / self.scale;
+        if inner.is_some_and(|rect| (rect.size() - self.size()).abs().max_elem() > tolerance) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(self.size()));
+        }
+        if outer.is_some_and(|rect| (rect.min - self.position()).abs().max_elem() > tolerance) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(self.position()));
+        }
+        self
+    }
 }
 
 /// The current hint, shared between the engine's reports and the bar window.
@@ -95,6 +110,7 @@ impl EdgeBar {
             .with_active(false);
         let hint = self.hint.clone();
         ctx.show_viewport_deferred(viewport_id(), builder, move |ui, _class| {
+            let strip = if cfg!(windows) { strip.fit_to_viewport(ui.ctx()) } else { strip };
             let hint = *hint.lock().unwrap();
             if let Some(hint) = hint {
                 paint(ui, strip, hint);

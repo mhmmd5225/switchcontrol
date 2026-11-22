@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -121,10 +121,9 @@ impl Listener {
         };
         let changed = {
             let mut map = self.found.lock().unwrap();
+            map.retain(|_, entry| entry.seen.elapsed() < FORGET_AFTER);
             let changed = map.get(&beacon.fingerprint).is_none_or(|old| {
-                old.addr != found.addr
-                    || old.name != found.name
-                    || old.seen.elapsed() > FORGET_AFTER
+                old.addr != found.addr || old.name != found.name || old.os != found.os
             });
             map.insert(beacon.fingerprint, found);
             changed
@@ -136,14 +135,10 @@ impl Listener {
 
     /// Computers heard recently, by name.
     pub fn peers(&self) -> Vec<Found> {
-        let mut peers: Vec<Found> = self
-            .found
-            .lock()
-            .unwrap()
-            .values()
-            .filter(|f| f.seen.elapsed() < FORGET_AFTER)
-            .cloned()
-            .collect();
+        let mut map = self.found.lock().unwrap();
+        map.retain(|_, entry| entry.seen.elapsed() < FORGET_AFTER);
+        let mut peers: Vec<_> = map.values().cloned().collect();
+        drop(map);
         peers.sort_by(|a, b| a.name.cmp(&b.name).then(a.addr.cmp(&b.addr)));
         peers
     }
@@ -152,11 +147,15 @@ impl Listener {
     pub fn set_waker(&self, wake: impl Fn() + Send + 'static) {
         *self.waker.lock().unwrap() = Some(Box::new(wake));
     }
+
+    pub fn clear_waker(&self) {
+        *self.waker.lock().unwrap() = None;
+    }
 }
 
 /// Broadcasts this computer's beacon until dropped.
 pub struct Announcer {
-    stop: Arc<AtomicBool>,
+    stop: Option<Sender<()>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -170,25 +169,23 @@ impl Announcer {
         let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))?;
         socket.set_broadcast(true)?;
         let packet = beacon.encode();
-        let stop = Arc::new(AtomicBool::new(false));
-        let thread_stop = stop.clone();
+        let (stop, stopped) = mpsc::channel();
         let thread = thread::Builder::new().name("sc-announce".into()).spawn(move || {
-            while !thread_stop.load(Ordering::SeqCst) {
+            loop {
                 // No network yet (e.g. right after login) is not an error worth reporting.
                 let _ = socket.send_to(&packet, target);
-                let end = Instant::now() + ANNOUNCE_EVERY;
-                while Instant::now() < end && !thread_stop.load(Ordering::SeqCst) {
-                    thread::sleep(Duration::from_millis(100));
+                if stopped.recv_timeout(ANNOUNCE_EVERY) != Err(mpsc::RecvTimeoutError::Timeout) {
+                    break;
                 }
             }
         })?;
-        Ok(Announcer { stop, thread: Some(thread) })
+        Ok(Announcer { stop: Some(stop), thread: Some(thread) })
     }
 }
 
 impl Drop for Announcer {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
+        self.stop = None;
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }

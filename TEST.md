@@ -26,18 +26,18 @@ Kısaltmalar: **W** = Windows bilgisayar, **M** = Mac.
 
 | # | Adım | Beklenen |
 |---|---|---|
-| 2.1 | W: **Rol: Bağlantı bekle**, **Diğer bilgisayar**: Mac hangi taraftaysa (ör. Sağda). **Başlat**. Windows Güvenlik Duvarı sorarsa izin verin. | Durum "Bağlantı bekleniyor"; altında W'nin IP adresi. |
-| 2.2 | M: **Rol: Bağlan**, **Adres**: W'nin IP'si, **Diğer bilgisayar**: W hangi taraftaysa (ör. Solda). **Başlat**. | Daha önce eşleştiyseniz doğrudan "Bağlı". Eşleşmediyseniz W'de 6 haneli PIN, M'de PIN sorusu çıkar. |
+| 2.1 | W: **Bağlantı bekle** seçin. **Ekran düzeni** altında Mac'in yönünü seçin (ör. Sağda) ve **Beklemeyi başlat** düğmesine basın. | Bağlantı bekleniyor durumu ve W'nin IP adresi görünür. |
+| 2.2 | M: **Bağlan** seçin. W'yi listeden seçin veya **Bilgisayar adresi** alanına W'nin IP'sini girin. Ekran yönünü seçip **Bağlantıyı başlat** düğmesine basın. | Daha önce eşleştiyseniz doğrudan "Bağlı". İlk bağlantıda W'de 6 haneli PIN görünür ve M'de PIN alanı odak alır. |
 | 2.3 | (PIN sorulduysa) W'deki PIN'i M'ye yazıp **Eşleştir**. | İki tarafta da "Bağlı: …"; çizimde yeşil çizgi, klavyenin olduğu bilgisayar mavi çerçeveli. |
 
 ## 2b. Ağda otomatik bulma
 
 | # | Adım | Beklenen |
 |---|---|---|
-| 2b.1 | W'de Bağlantı bekle ile **Başlat**. M'de Rol: **Bağlan**, henüz Başlat'a basmayın. | M'de "Ağda bulunanlar" altında W'nin adı, işletim sistemi ve IP'si birkaç saniye içinde görünür (eşleştiyseniz yeşil "eşleşmiş"). Windows güvenlik duvarı sorarsa izin verin. |
-| 2b.2 | M'de listede **Seç**. | Adres alanı dolar. |
-| 2b.3 | (Eşleşmiş olmalı) M'de adres alanını boşaltıp **Başlat**. | Durum "Eşleşmiş bilgisayar aranıyor…", birkaç saniye içinde "Bağlı". |
-| 2b.4 | W'de **Ağda görünür ol** anahtarını kapatıp (Durdur > kapat > Başlat) M'deki listeye bakın. | En geç 7 saniyede W listeden kaybolur. |
+| 2b.1 | W'de **Beklemeyi başlat** düğmesine basın. M'de **Bağlan** rolünü açın. | **Ağdaki bilgisayarlar** altında W'nin adı, işletim sistemi ve IP'si görünür. Windows güvenlik duvarı sorarsa izin verin. |
+| 2b.2 | M'de listeden W'yi seçin. Klavyeyle denemek için Tab ile satıra gidip Enter'a basın. | Adres alanı dolar. |
+| 2b.3 | Eşleşmeden sonra M'de adres alanını boşaltıp **Bağlantıyı başlat** düğmesine basın. | Önce "Eşleşmiş bilgisayar aranıyor…" ve ardından "Bağlı" görünür. |
+| 2b.4 | W'de **Durdur** düğmesine basın, **Ağda görünür ol** anahtarını kapatın ve beklemeyi yeniden başlatın. | W birkaç saniye içinde M'deki listeden kaybolur. |
 
 ## 3. Geçiş ve kenar çubuğu
 
@@ -95,7 +95,13 @@ Aşağıda klavye ve farenin W'ye bağlı olduğu varsayıldı. Mac'in klavyesin
 | 6.3 | İki bilgisayarda oturumu kapatıp yeniden açın (ya da yeniden başlatın). | SwitchControl kendiliğinden simge olarak başlar (pencere bir an görünüp kaybolabilir) ve iki taraf birbirine bağlanır; geçiş çalışır. |
 | 6.4 | Anahtarı kapatın, yeniden oturum açın. | SwitchControl kendiliğinden başlamaz. |
 
-## 7. Gönderilecekler
+## 7. Ekran ölçeği ve performans
+
+- Windows'ta 1366 × 768 ve 4K ekranlarda %100, %150 ve %200 ölçeklemeyi deneyin. Mac'te Retina ve harici ekranda deneyin. Pencereyi daraltın, iki ekran arasında taşıyın ve farklı ekran ölçeklerinde bağlantı düğmesinin görünür kaldığını, PIN alanının odağını ve kenar çubuğunun konumunu kontrol edin.
+- Aynı makinelerde eski ve yeni `release` derlemelerini ayrı çalıştırın. Pencere açık ve bağlantısız, pencere açık ve bağlantı beklerken, simgede gizli ve bağlı beklerken, son olarak bağlı ve sürekli fare aktarırken ölçüm alın. Her durumda 30 saniye ısındıktan sonra 60 saniyelik üç örnek alın.
+- İşlem CPU süresini ve bellek değerini kaydedin. Windows için özel çalışma kümesini, macOS için fiziksel bellek ayak izini kullanın. Belleğin birikmediğini kontrol etmek için aynı koşullarda 20 başlatma, bağlanma ve durdurma döngüsünden sonra tekrar ölçün. Aktif aktarımda tuşların bırakıldığını ve acil dönüş kısayolunu da kontrol edin.
+
+## 8. Gönderilecekler
 
 - Hangi adımlar beklendiği gibi, hangileri değil (numaraları yeterli).
 - Sorunlu adımların ekran görüntüsü ve iki taraftaki **Günlük** içeriği.

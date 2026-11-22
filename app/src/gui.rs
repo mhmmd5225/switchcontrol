@@ -29,8 +29,8 @@ use crate::tray::{Tray, TrayCommand};
 
 const SETTINGS_FILE: &str = "settings.toml";
 const LOG_LINES: usize = 500;
-/// The window does not resize: both pages are laid out to fit it.
-const WINDOW_SIZE: (f32, f32) = (460.0, 780.0);
+const MIN_WINDOW: egui::Vec2 = egui::vec2(340.0, 260.0);
+const TWO_COLUMNS: f32 = 700.0;
 
 /// The emergency hotkey as this OS spells it.
 const HOTKEY: &str =
@@ -42,9 +42,8 @@ pub fn run(at_login: bool) -> Result<(), String> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("SwitchControl")
-            .with_inner_size([WINDOW_SIZE.0, WINDOW_SIZE.1])
-            .with_resizable(false)
-            .with_maximize_button(false)
+            .with_inner_size([800.0, 520.0])
+            .with_min_inner_size(MIN_WINDOW)
             .with_icon(Arc::new(
                 eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icon-256.png"))
                     .expect("bundled icon is a valid PNG"),
@@ -152,6 +151,7 @@ struct View {
     show_pin: Option<String>,
     ask_pin: Option<SocketAddr>,
     pin_input: String,
+    focus_pin: bool,
     log: VecDeque<String>,
 }
 
@@ -184,17 +184,19 @@ pub struct GuiApp {
     reports_rx: Receiver<(u64, Report)>,
     view: View,
     error: Option<String>,
+    reveal_error: bool,
     perms: Permissions,
     perms_checked: Instant,
     /// Fingerprints of the paired computers.
     paired: Vec<Fingerprint>,
     local_ip: Option<IpAddr>,
     edge_bar: EdgeBar,
-    /// Where the edge bar goes, if it is on. Its window stays open even while
-    /// sharing is off, so it can show up while the main window is hidden.
+    /// The edge bar has a separate viewport while sharing is enabled.
     strip: Option<Strip>,
-    /// The settings `strip` was made for; `None` to make it again.
-    strip_for: Option<(Side, bool)>,
+    strip_for: Option<Side>,
+    browsing: bool,
+    in_tray: bool,
+    fit_on_first_frame: bool,
     tray: Option<Tray>,
     /// Hide into the tray once the first frame has opened the edge bar.
     hide_on_first_frame: bool,
@@ -222,12 +224,16 @@ impl GuiApp {
             reports_rx,
             view: View::default(),
             error: None,
+            reveal_error: false,
             perms: sys::permissions(),
             perms_checked: Instant::now(),
             local_ip: local_ip(),
             edge_bar: EdgeBar::default(),
             strip: None,
             strip_for: None,
+            browsing: false,
+            in_tray: false,
+            fit_on_first_frame: true,
             tray: None,
             hide_on_first_frame: false,
             quitting: false,
@@ -252,6 +258,7 @@ impl GuiApp {
         for command in tray.commands() {
             match command {
                 TrayCommand::Show => {
+                    self.in_tray = false;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
@@ -270,6 +277,7 @@ impl GuiApp {
         }
         // The close button hides the window; the tray icon brings it back.
         if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
+            self.in_tray = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
@@ -280,25 +288,53 @@ impl GuiApp {
         }
     }
 
-    /// Keeps the edge bar's window where the settings put it.
+    fn wants_edge_bar(&self) -> bool {
+        self.running.is_some() && self.form.edge_bar && !self.ctx.embed_viewports()
+    }
+
+    /// Keep the overlay registered even when only its window is visible.
     fn edge_bar_ui(&mut self, ctx: &egui::Context) {
-        let wanted = (self.form.side, self.form.edge_bar);
-        if self.strip_for != Some(wanted) {
-            self.strip_for = Some(wanted);
-            // Monitor coordinates are physical pixels on Windows and points elsewhere.
-            let scale =
-                if cfg!(windows) { ctx.native_pixels_per_point().unwrap_or(1.0) } else { 1.0 };
+        if !self.wants_edge_bar() {
+            self.strip_for = None;
+            self.strip = None;
+            return;
+        }
+        if self.strip_for != Some(self.form.side) {
+            self.strip_for = Some(self.form.side);
+            let scale = if cfg!(windows) { ctx.pixels_per_point() } else { 1.0 };
             let screens: Vec<_> = sys::monitors().into_iter().map(|m| m.bounds).collect();
-            self.strip =
-                if self.form.edge_bar { Strip::new(&screens, self.form.side, scale) } else { None };
+            self.strip = Strip::new(&screens, self.form.side, scale);
         }
         if let Some(strip) = self.strip {
             self.edge_bar.show(ctx, strip);
         }
     }
 
+    fn window_hidden(&self, ctx: &egui::Context) -> bool {
+        self.in_tray || ctx.input(|i| i.viewport().visible() == Some(false))
+    }
+
+    fn update_discovery(&mut self, visible: bool) {
+        let browsing = visible
+            && self.page == Page::Connection
+            && self.form.mode == Mode::Connect
+            && self.running.is_none()
+            && !self.ctx.embed_viewports();
+        if browsing == self.browsing {
+            return;
+        }
+        self.browsing = browsing;
+        if browsing {
+            let ctx = self.ctx.clone();
+            Listener::global().set_waker(move || ctx.request_repaint_of(egui::ViewportId::ROOT));
+        } else {
+            Listener::global().clear_waker();
+        }
+    }
+
     fn start(&mut self) {
         self.error = None;
+        self.reveal_error = true;
         // Without an address only a paired computer heard on the network will do.
         if self.form.mode == Mode::Connect
             && self.form.address.trim().is_empty()
@@ -329,7 +365,7 @@ impl GuiApp {
             Report::Edge(hint) => bar.set(&ctx, hint),
             r => {
                 let _ = tx.send((generation, r));
-                ctx.request_repaint();
+                ctx.request_repaint_of(egui::ViewportId::ROOT);
             }
         });
         let (pin_tx, pin_rx) = mpsc::channel::<Option<String>>();
@@ -359,6 +395,7 @@ impl GuiApp {
         self.view.remote = false;
         self.view.show_pin = None;
         self.view.ask_pin = None;
+        self.view.pin_input.clear();
         self.paired = paired_list(&self.data_dir);
     }
 
@@ -403,28 +440,24 @@ impl GuiApp {
                 Report::AskPin(addr) => {
                     self.view.ask_pin = Some(addr);
                     self.view.pin_input.clear();
+                    self.view.focus_pin = true;
                 }
                 Report::Stopped(result) => {
                     if let Err(e) = result {
                         self.push_log(format!("stopped: {e}"));
                         self.error = Some(explain(&e));
+                        self.reveal_error = true;
                     }
                     self.stop();
                 }
             }
-        }
-        if self.perms_checked.elapsed() >= Duration::from_secs(1) {
-            self.perms = sys::permissions();
-            self.perms_checked = Instant::now();
         }
     }
 
     /// Headline, detail line and picture for the current state.
     fn status(&self) -> (String, String, Link) {
         match (&self.running, &self.view.link) {
-            (None, _) => {
-                ("Durduruldu".into(), "Başlat'a basarak bağlantıyı açın.".into(), Link::Off)
-            }
+            (None, _) => ("Durduruldu".into(), String::new(), Link::Off),
             (Some(_), None) => ("Başlatılıyor…".into(), String::new(), Link::Waiting),
             (Some(_), Some(LinkState::Waiting(Waiting::Listening(addr)))) => {
                 let detail = match self.local_ip {
@@ -463,18 +496,12 @@ impl GuiApp {
     }
 
     fn header_ui(&mut self, ui: &mut egui::Ui) {
-        let (_, _, link) = self.status();
-        let dry_run = self.dry_run && self.running.is_some();
-        ui.horizontal(|ui| {
-            ui.label(theme::semibold("SwitchControl").size(20.0));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                theme::status_pill(ui, link);
-                if dry_run {
-                    ui.label(RichText::new("Deneme modu").small().weak());
-                }
-            });
+        ui.horizontal_wrapped(|ui| {
+            ui.label(theme::semibold("SwitchControl").size(22.0));
+            if self.dry_run {
+                ui.label(RichText::new("Deneme modu").small().weak());
+            }
         });
-        ui.add_space(2.0);
         theme::tabs(
             ui,
             &mut self.page,
@@ -484,22 +511,29 @@ impl GuiApp {
 
     fn status_ui(&self, ui: &mut egui::Ui) {
         let (title, detail, link) = self.status();
-        let peer = match &self.view.link {
-            Some(LinkState::Connected { peer, .. }) => peer.as_str(),
-            _ => "—",
-        };
         theme::card(ui, |ui| {
-            let p = Palette::of(ui);
-            theme::monitors(ui, self.form.side == Side::Left, link, self.form.name.trim(), peer);
-            ui.vertical_centered(|ui| {
-                ui.label(theme::semibold(title).size(16.0));
-                if !detail.is_empty() {
-                    ui.label(RichText::new(detail).color(p.muted));
-                }
-                if let Some(error) = &self.error {
-                    ui.add_space(2.0);
-                    ui.label(RichText::new(error).color(p.red));
-                }
+            ui.horizontal_wrapped(|ui| {
+                theme::status_indicator(ui, link);
+                ui.label(theme::semibold(title).size(20.0));
+            });
+            if !detail.is_empty() {
+                ui.label(RichText::new(detail).weak());
+            }
+        });
+    }
+
+    fn layout_ui(&mut self, ui: &mut egui::Ui) {
+        let (_, _, link) = self.status();
+        theme::card(ui, |ui| {
+            ui.label(theme::semibold("Ekran düzeni").size(17.0));
+            theme::monitors(ui, self.form.side == Side::Left, link);
+            ui.add_enabled_ui(self.running.is_none(), |ui| {
+                ui.label("Diğer bilgisayar");
+                theme::segmented(
+                    ui,
+                    &mut self.form.side,
+                    &[(Side::Left, "Solda"), (Side::Right, "Sağda")],
+                );
             });
         });
     }
@@ -532,7 +566,7 @@ impl GuiApp {
                     }
                 });
             }
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if theme::button(ui, "İzin iste", Kind::Secondary).clicked() {
                     sys::init();
                 }
@@ -568,8 +602,7 @@ impl GuiApp {
                 let label = ui.label(
                     RichText::new("Diğer bilgisayarda görünen 6 haneli PIN:").color(p.muted),
                 );
-                let pin = normalize_pin(&self.view.pin_input);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let edit = theme::text_field(
                         ui,
                         &mut self.view.pin_input,
@@ -578,18 +611,20 @@ impl GuiApp {
                         egui::TextStyle::Heading,
                     )
                     .labelled_by(label.id);
-                    if !edit.has_focus() && self.view.pin_input.is_empty() {
+                    if std::mem::take(&mut self.view.focus_pin) {
                         edit.request_focus();
+                        edit.scroll_to_me(None);
                     }
                     let entered =
                         edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let pin = normalize_pin(&self.view.pin_input);
                     let pair = ui
                         .add_enabled_ui(pin.is_some(), |ui| {
                             theme::button(ui, "Eşleştir", Kind::Primary)
                         })
                         .inner;
                     if pin.is_some() && (pair.clicked() || entered) {
-                        answer = Some(pin.clone());
+                        answer = Some(pin);
                     }
                     if theme::button(ui, "İptal", Kind::Ghost).clicked() {
                         answer = Some(None);
@@ -602,75 +637,61 @@ impl GuiApp {
         }
     }
 
-    /// Who connects to whom: everything needed to press Başlat.
     fn connection_ui(&mut self, ui: &mut egui::Ui) {
         let enabled = self.running.is_none();
-        let local_ip = self.local_ip;
-        let paired = &self.paired;
         let form = &mut self.form;
-        ui.add_enabled_ui(enabled, |ui| {
-            ui.add_space(8.0);
-            theme::card(ui, |ui| {
-                theme::row(ui, "Rol", |ui| {
-                    theme::segmented(
-                        ui,
-                        &mut form.mode,
-                        &[(Mode::Listen, "Bağlantı bekle"), (Mode::Connect, "Bağlan")],
-                    )
-                });
+        theme::card(ui, |ui| {
+            ui.label(theme::semibold("Hızlı bağlantı").size(17.0));
+            ui.add_enabled_ui(enabled, |ui| {
+                theme::segmented(
+                    ui,
+                    &mut form.mode,
+                    &[(Mode::Connect, "Bağlan"), (Mode::Listen, "Bağlantı bekle")],
+                );
                 theme::divider(ui);
                 match form.mode {
                     Mode::Connect => {
-                        let (label, edit) = theme::row(ui, "Adres", |ui| {
-                            let hint = if paired.is_empty() {
-                                "192.168.1.20"
-                            } else {
-                                "boş: kendisi bulur"
-                            };
-                            theme::text_field(
-                                ui,
-                                &mut form.address,
-                                hint,
-                                190.0,
-                                egui::TextStyle::Body,
-                            )
-                        });
-                        edit.labelled_by(label.id);
-                        found_ui(ui, &mut form.address, paired);
+                        if enabled {
+                            found_ui(ui, &mut form.address, &self.paired);
+                        }
+                        let label = ui.label("Bilgisayar adresi");
+                        let hint = if self.paired.is_empty() {
+                            "Örn. 192.168.1.20"
+                        } else {
+                            "Boş bırakırsanız eşleşmiş bilgisayar aranır"
+                        };
+                        theme::text_field(
+                            ui,
+                            &mut form.address,
+                            hint,
+                            ui.available_width(),
+                            egui::TextStyle::Body,
+                        )
+                        .labelled_by(label.id);
                     }
                     Mode::Listen => {
-                        theme::row(ui, "Bu bilgisayarın adresi", |ui| match local_ip {
-                            Some(ip) => {
+                        ui.label("Bu bilgisayarın adresi");
+                        ui.horizontal_wrapped(|ui| {
+                            if let Some(ip) = self.local_ip {
+                                ui.label(theme::semibold(ip.to_string()));
                                 if theme::button(ui, "Kopyala", Kind::Ghost).clicked() {
                                     ui.ctx().copy_text(ip.to_string());
                                 }
-                                ui.label(theme::semibold(ip.to_string()));
-                            }
-                            None => {
-                                ui.label(RichText::new("bulunamadı").weak());
+                            } else {
+                                ui.label(RichText::new("Adres bulunamadı").weak());
                             }
                         });
-                        theme::divider(ui);
-                        let announce = "Ağda görünür ol";
-                        theme::row(ui, announce, |ui| {
-                            theme::switch(ui, &mut form.announce, announce)
-                        });
+                        let label = "Ağda görünür ol";
+                        theme::row(ui, label, |ui| theme::switch(ui, &mut form.announce, label));
                     }
                 }
-                theme::divider(ui);
-                theme::row(ui, "Diğer bilgisayar", |ui| {
-                    theme::segmented(
-                        ui,
-                        &mut form.side,
-                        &[(Side::Left, "Solda"), (Side::Right, "Sağda")],
-                    )
-                });
-                theme::divider(ui);
-                let (label, edit) = theme::row(ui, "Bu bilgisayarın adı", |ui| {
-                    theme::text_field(ui, &mut form.name, "", 190.0, egui::TextStyle::Body)
-                });
-                edit.labelled_by(label.id);
             });
+            if let Some(error) = &self.error {
+                let label = ui.label(RichText::new(error).color(Palette::of(ui).red));
+                if std::mem::take(&mut self.reveal_error) {
+                    label.scroll_to_me(None);
+                }
+            }
         });
     }
 
@@ -715,6 +736,13 @@ impl GuiApp {
         let running = self.running.is_some();
         theme::section(ui, "Uygulama");
         theme::card(ui, |ui| {
+            ui.add_enabled_ui(!running, |ui| {
+                let (label, edit) = theme::row(ui, "Bu bilgisayarın adı", |ui| {
+                    theme::text_field(ui, &mut self.form.name, "", 190.0, egui::TextStyle::Body)
+                });
+                edit.labelled_by(label.id);
+            });
+            theme::divider(ui);
             let label = "Oturum açılınca başlat";
             let mut on = self.autostart;
             let (_, switch) = theme::row(ui, label, |ui| theme::switch(ui, &mut on, label));
@@ -770,12 +798,15 @@ impl GuiApp {
 
     fn footer_ui(&mut self, ui: &mut egui::Ui) {
         let running = self.running.is_some();
-        let (text, kind) =
-            if running { ("Durdur", Kind::Danger) } else { ("Başlat", Kind::Primary) };
+        let (text, kind) = match (running, self.form.mode) {
+            (true, _) => ("Durdur", Kind::Danger),
+            (false, Mode::Connect) => ("Bağlantıyı başlat", Kind::Primary),
+            (false, Mode::Listen) => ("Beklemeyi başlat", Kind::Primary),
+        };
         if theme::big_button(ui, text, kind).clicked() {
             if running { self.stop() } else { self.start() }
         }
-        ui.vertical_centered(|ui| {
+        if running {
             ui.label(
                 RichText::new(format!(
                     "{HOTKEY} klavye ve fareyi her zaman bu bilgisayara getirir"
@@ -783,7 +814,7 @@ impl GuiApp {
                 .small()
                 .weak(),
             );
-        });
+        }
     }
 }
 
@@ -792,47 +823,86 @@ impl eframe::App for GuiApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll();
         self.tray_logic(ctx);
+        let hidden = self.window_hidden(ctx);
+        self.update_discovery(!hidden);
+        if hidden && self.wants_edge_bar() && self.strip_for.is_none() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
+            ctx.request_repaint_of(egui::ViewportId::ROOT);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        theme::paint_backdrop(ui);
-        egui::Panel::bottom("footer")
-            .show_separator_line(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(egui::Color32::from_black_alpha(70))
-                    .inner_margin(egui::Margin { left: 16, right: 16, top: 12, bottom: 10 }),
-            )
-            .show(ui, |ui| self.footer_ui(ui));
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 14)))
-            .show(ui, |ui| {
-                self.header_ui(ui);
-                // Needed whichever page is open: a PIN question must not hide.
-                if self.page == Page::Connection {
-                    self.status_ui(ui);
+        if self.window_hidden(ui.ctx()) {
+            self.edge_bar_ui(ui.ctx());
+            return;
+        }
+        if std::mem::take(&mut self.fit_on_first_frame) {
+            let (monitor, inner) =
+                ui.input(|i| (i.viewport().monitor_size, i.viewport().inner_rect));
+            if let (Some(monitor), Some(inner)) = (monitor, inner) {
+                // Reserve space for the title bar and the OS taskbar or Dock.
+                let limit = (monitor - egui::vec2(24.0, 68.0)).max(MIN_WINDOW);
+                let size = inner.size().min(limit);
+                if size != inner.size() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
                 }
-                self.permissions_ui(ui);
-                self.pairing_ui(ui);
-                // Both pages fit; the bar shows only if a long list or the open log overflow.
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self
-                    .page
-                {
-                    Page::Connection => self.connection_ui(ui),
-                    Page::Settings => {
-                        self.behavior_ui(ui);
-                        self.app_ui(ui);
-                        self.log_ui(ui);
+            }
+        }
+        if self.perms_checked.elapsed() >= Duration::from_secs(1) {
+            self.perms = sys::permissions();
+            self.perms_checked = Instant::now();
+        }
+
+        theme::paint_backdrop(ui);
+        if self.page == Page::Connection || self.running.is_some() {
+            egui::Panel::bottom("footer")
+                .show_separator_line(false)
+                .frame(
+                    egui::Frame::new()
+                        .fill(Palette::of(ui).top)
+                        .inner_margin(egui::Margin::symmetric(16, 10)),
+                )
+                .show(ui, |ui| self.footer_ui(ui));
+        }
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(16, 12)))
+            .show(ui, |ui| {
+                ui.set_max_width(ui.available_width().min(1000.0));
+                self.header_ui(ui);
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    self.status_ui(ui);
+                    // Pairing is available from either page.
+                    self.pairing_ui(ui);
+                    self.permissions_ui(ui);
+                    match self.page {
+                        Page::Connection if ui.available_width() >= TWO_COLUMNS => {
+                            ui.columns(2, |columns| {
+                                self.connection_ui(&mut columns[0]);
+                                self.layout_ui(&mut columns[1]);
+                            });
+                        }
+                        Page::Connection => {
+                            self.connection_ui(ui);
+                            self.layout_ui(ui);
+                        }
+                        Page::Settings => {
+                            if let Some(error) = &self.error {
+                                ui.label(RichText::new(error).color(Palette::of(ui).red));
+                            }
+                            self.behavior_ui(ui);
+                            self.app_ui(ui);
+                            self.log_ui(ui);
+                        }
                     }
                 });
             });
         self.edge_bar_ui(ui.ctx());
         if std::mem::take(&mut self.hide_on_first_frame) {
+            self.in_tray = true;
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
-        // Picks up permission changes made in System Settings. Otherwise the
-        // window only redraws on input or when the engine reports something.
-        if !self.perms.all_granted() {
+        self.update_discovery(!self.in_tray);
+        if !self.in_tray && !self.perms.all_granted() {
             ui.ctx().request_repaint_after(Duration::from_secs(1));
         }
     }
@@ -851,18 +921,15 @@ impl eframe::App for GuiApp {
 /// The computers heard on the network; picking one fills in its address.
 fn found_ui(ui: &mut egui::Ui, address: &mut String, paired: &[Fingerprint]) {
     let listener = Listener::global();
-    let ctx = ui.ctx().clone();
-    listener.set_waker(move || ctx.request_repaint());
-    // Drops computers that went quiet even when nothing new arrives.
-    ui.ctx().request_repaint_after(std::time::Duration::from_secs(2));
+    // Drop quiet computers even when no new beacons arrive.
+    ui.ctx().request_repaint_after(Duration::from_secs(2));
 
     let p = Palette::of(ui);
-    theme::divider(ui);
-    ui.label(RichText::new("Ağda bulunanlar").small().color(p.muted));
+    ui.label(theme::semibold("Ağdaki bilgisayarlar"));
     let found = listener.peers();
     if found.is_empty() {
         ui.label(
-            RichText::new("Aranıyor… Diğer bilgisayarda Bağlantı bekle ile Başlat'a basın.")
+            RichText::new("Bilgisayar bulunamadı. Diğer bilgisayarda beklemeyi başlatın.")
                 .small()
                 .weak(),
         );
@@ -873,19 +940,22 @@ fn found_ui(ui: &mut egui::Ui, address: &mut String, paired: &[Fingerprint]) {
             sc_proto::Os::MacOs => "Mac",
             sc_proto::Os::Other => "Linux",
         };
-        let addr = computer.addr.to_string();
-        theme::row(ui, &format!("{} ({os})", computer.name), |ui| {
-            let pick = ui
-                .add_enabled_ui(*address != addr, |ui| theme::button(ui, "Seç", Kind::Ghost))
-                .inner;
-            if pick.clicked() {
-                *address = addr.clone();
+        let paired = paired.contains(&computer.fingerprint);
+        ui.push_id(computer.addr, |ui| {
+            let label = format!("{} · {os} · {}", computer.name, computer.addr.ip());
+            peer_choice(ui, address, computer.addr, &label);
+            if paired {
+                ui.label(RichText::new("Eşleşmiş").small().color(p.green));
             }
-            if paired.contains(&computer.fingerprint) {
-                ui.label(RichText::new("eşleşmiş").small().color(p.green));
-            }
-            ui.label(RichText::new(computer.addr.ip().to_string()).small().weak());
         });
+    }
+}
+
+fn peer_choice(ui: &mut egui::Ui, address: &mut String, peer: SocketAddr, label: &str) {
+    let peer_address = peer.to_string();
+    let selected = *address == peer_address;
+    if ui.add(egui::Button::selectable(selected, label).wrap()).clicked() {
+        *address = peer_address;
     }
 }
 
@@ -948,10 +1018,16 @@ mod tests {
     }
 
     fn harness(dir: &Path) -> Harness<'static, GuiApp> {
+        harness_at(dir, [440.0, 680.0], 1.0)
+    }
+
+    fn harness_at(dir: &Path, size: [f32; 2], scale: f32) -> Harness<'static, GuiApp> {
         let dir = dir.to_path_buf();
-        Harness::builder()
-            .with_size([440.0, 680.0])
-            .build_eframe(move |cc| GuiApp::new(cc.egui_ctx.clone(), dir, true))
+        Harness::builder().with_size(size).with_pixels_per_point(scale).build_eframe(move |cc| {
+            let mut app = GuiApp::new(cc.egui_ctx.clone(), dir, true);
+            app.perms = Permissions { listen: true, post: true };
+            app
+        })
     }
 
     /// Steps the window until `done` holds, failing after a few seconds.
@@ -978,7 +1054,7 @@ mod tests {
         let dir = temp_dir("pages");
         let mut harness = harness(&dir);
         harness.step();
-        harness.get_by_label("Başlat");
+        harness.get_by_label("Beklemeyi başlat");
         assert!(harness.query_by_label("İmleç hızı").is_none());
 
         harness.get_by_label("Ayarlar").click();
@@ -998,7 +1074,7 @@ mod tests {
         let dir = temp_dir("hover");
         let mut harness = harness(&dir);
         harness.step();
-        for label in ["Başlat", "Ayarlar", "Bağlan"] {
+        for label in ["Beklemeyi başlat", "Ayarlar", "Bağlan"] {
             let before = harness.get_by_label(label).rect();
             harness.get_by_label(label).hover();
             harness.run_steps(8);
@@ -1013,11 +1089,61 @@ mod tests {
         harness.state_mut().form.mode = Mode::Connect;
         harness.state_mut().form.address.clear();
         harness.step();
-        harness.get_by_label("Başlat").click();
+        harness.get_by_label("Bağlantıyı başlat").click();
         harness.run_steps(2);
         assert!(harness.state().running.is_none());
         assert!(harness.state().error.is_some());
         harness.get_by_label("Bağlanılacak bilgisayarın adresini girin.");
+    }
+
+    #[test]
+    fn connection_reflows_without_hiding_primary_action() {
+        for (width, height, scale) in [(340.0, 360.0, 2.0), (800.0, 520.0, 1.5)] {
+            let dir = temp_dir(&format!("layout-{width}"));
+            let mut harness = harness_at(&dir, [width, height], scale);
+            harness.run_steps(3);
+
+            let connection = harness.get_by_label("Hızlı bağlantı").rect();
+            let layout = harness.get_by_label("Ekran düzeni").rect();
+            if width >= TWO_COLUMNS {
+                assert!(connection.right() < layout.left());
+                assert_eq!(connection.top(), layout.top());
+            } else {
+                assert_eq!(connection.left(), layout.left());
+                assert!(connection.bottom() < layout.top());
+            }
+            let action = harness.get_by_label("Beklemeyi başlat").rect();
+            assert!(action.right() <= width && action.bottom() <= height);
+        }
+    }
+
+    #[test]
+    fn selects_discovered_peer_with_keyboard() {
+        let peer = "192.0.2.2:24800".parse().unwrap();
+        let label = "Diğer bilgisayar · Windows · 192.0.2.2";
+        let mut harness = Harness::new_ui_state(
+            |ui, address| peer_choice(ui, address, peer, label),
+            String::new(),
+        );
+        harness.key_press(egui::Key::Tab);
+        harness.run_steps(2);
+        assert!(harness.get_by_label(label).is_focused());
+        harness.key_press(egui::Key::Enter);
+        harness.run_steps(2);
+        assert_eq!(harness.state(), &peer.to_string());
+    }
+
+    #[test]
+    fn connection_diagram_does_not_schedule_periodic_redraws() {
+        for link in [Link::Waiting, Link::Remote] {
+            let mut harness = Harness::new_ui(move |ui| {
+                theme::status_indicator(ui, link);
+                theme::monitors(ui, false, link);
+            });
+            harness.run_steps(4);
+            let root = &harness.output().viewport_output[&egui::ViewportId::ROOT];
+            assert_eq!(root.repaint_delay, Duration::MAX);
+        }
     }
 
     /// Pairs the window with a listening engine by typing the PIN, then stops
@@ -1045,13 +1171,13 @@ mod tests {
             Arc::new(move |r| drop(peer_tx.send(r))),
         );
 
-        let mut harness = harness(&gui_dir);
+        let mut harness = harness_at(&gui_dir, [340.0, 360.0], 2.0);
         let form = &mut harness.state_mut().form;
         form.mode = Mode::Connect;
         form.address = format!("127.0.0.1:{port}");
         form.name = "Window".into();
         harness.step();
-        harness.get_by_label("Başlat").click();
+        harness.get_by_label("Bağlantıyı başlat").click();
         step_until(&mut harness, "the PIN question", |app| app.view.ask_pin.is_some());
 
         let pin = peer_rx
@@ -1061,9 +1187,11 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        harness.get_by_label("Diğer bilgisayarda görünen 6 haneli PIN:").type_text(&pin);
+        let field = harness.get_by_label("Diğer bilgisayarda görünen 6 haneli PIN:");
+        assert!(field.is_focused());
+        field.type_text(&pin);
         harness.step();
-        harness.get_by_label("Eşleştir").click();
+        harness.key_press(egui::Key::Enter);
         step_until(&mut harness, "the connection", |app| connected_to(app).is_some());
         assert_eq!(connected_to(harness.state()), Some("Peer"));
         assert_eq!(harness.state().paired.len(), 1);
@@ -1075,7 +1203,9 @@ mod tests {
         harness.get_by_label("Durduruldu");
 
         // Paired now: the second start connects without asking.
-        harness.get_by_label("Başlat").click();
+        harness.set_size(egui::vec2(800.0, 520.0));
+        harness.run_steps(2);
+        harness.get_by_label("Bağlantıyı başlat").click();
         step_until(&mut harness, "the reconnection", |app| connected_to(app).is_some());
         assert!(harness.state().view.ask_pin.is_none());
         let saved = config::load(&gui_dir.join(SETTINGS_FILE)).unwrap();
@@ -1086,7 +1216,7 @@ mod tests {
         harness.run_steps(2);
         harness.state_mut().form.address.clear();
         harness.step();
-        harness.get_by_label("Başlat").click();
+        harness.get_by_label("Bağlantıyı başlat").click();
         harness.run_steps(2);
         assert!(harness.state().running.is_some());
         assert!(harness.state().error.is_none());

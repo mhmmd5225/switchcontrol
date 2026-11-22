@@ -1,5 +1,4 @@
-//! Look and feel of the window: the system's own UI font, one dark "glass"
-//! palette, and the widgets egui lacks (cards, buttons, segmented controls,
+//! Look and feel of the window: the system's own UI font, a dark palette, and the widgets egui lacks (cards, buttons, segmented controls,
 //! tabs, switches, the two-monitor picture).
 //!
 //! Every clickable widget here takes a fixed size and paints itself, so
@@ -7,12 +6,11 @@
 //! new outline.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use eframe::egui::{
     self, Color32, CornerRadius, CursorIcon, FontData, FontDefinitions, FontFamily, FontId, Id,
-    Margin, Pos2, Rect, Response, RichText, Role, Sense, Shape, Stroke, StrokeKind, TextStyle,
-    Theme, Vec2, WidgetInfo,
+    Margin, Pos2, Rect, Response, RichText, Role, Sense, Stroke, StrokeKind, TextStyle, Theme,
+    Vec2, WidgetInfo,
 };
 
 const SEMIBOLD_FAMILY: &str = "semibold";
@@ -35,33 +33,41 @@ fn font_candidates() -> (&'static [&'static str], &'static [&'static str]) {
     }
 }
 
-fn first_font(paths: &[&str]) -> Option<Vec<u8>> {
-    paths.iter().find_map(|p| std::fs::read(p).ok())
-}
-
 /// Sets fonts and the palette. Call once at startup.
 pub fn install(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
     let defaults = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let (regular, semibold) = font_candidates();
     let mut semibold_family = defaults.clone();
-    if let Some(bytes) = first_font(regular) {
+    let mut regular_path = None;
+    if let Some((path, bytes)) =
+        regular.iter().find_map(|path| std::fs::read(path).ok().map(|bytes| (*path, bytes)))
+    {
+        regular_path = Some(path);
         fonts.font_data.insert("system-ui".into(), Arc::new(FontData::from_owned(bytes)));
         if let Some(family) = fonts.families.get_mut(&FontFamily::Proportional) {
             family.insert(0, "system-ui".into());
         }
         semibold_family.insert(0, "system-ui".into());
     }
-    if let Some(bytes) = first_font(semibold) {
-        fonts.font_data.insert("system-ui-semibold".into(), Arc::new(FontData::from_owned(bytes)));
-        semibold_family.insert(0, "system-ui-semibold".into());
+    for &path in semibold {
+        if regular_path == Some(path) {
+            break;
+        }
+        if let Ok(bytes) = std::fs::read(path) {
+            fonts
+                .font_data
+                .insert("system-ui-semibold".into(), Arc::new(FontData::from_owned(bytes)));
+            semibold_family.insert(0, "system-ui-semibold".into());
+            break;
+        }
     }
     fonts.families.insert(FontFamily::Name(SEMIBOLD_FAMILY.into()), semibold_family);
     ctx.set_fonts(fonts);
 
     // One look, whatever the OS theme says.
     ctx.set_theme(egui::ThemePreference::Dark);
-    let p = Palette::glass();
+    let p = Palette::dark();
     ctx.style_mut_of(Theme::Light, |style| apply(style, &p));
     ctx.style_mut_of(Theme::Dark, |style| apply(style, &p));
 }
@@ -73,10 +79,9 @@ pub fn semibold(text: impl Into<String>) -> RichText {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
-    /// Top and bottom of the window's gradient.
+    /// Window background.
     pub top: Color32,
-    pub bottom: Color32,
-    /// Glass: translucent white over the gradient.
+    /// Panel surface.
     pub card: Color32,
     pub border: Color32,
     pub shine: Color32,
@@ -93,19 +98,18 @@ pub struct Palette {
 }
 
 impl Palette {
-    pub fn glass() -> Palette {
+    pub fn dark() -> Palette {
         Palette {
-            top: Color32::from_rgb(0x0b, 0x0d, 0x17),
-            bottom: Color32::from_rgb(0x16, 0x10, 0x2c),
+            top: Color32::from_rgb(0x12, 0x16, 0x1e),
             card: Color32::from_white_alpha(13),
             border: Color32::from_white_alpha(23),
             shine: Color32::from_white_alpha(36),
             field: Color32::from_white_alpha(15),
             field_hover: Color32::from_white_alpha(26),
             text: Color32::from_rgb(0xee, 0xf0, 0xf6),
-            muted: Color32::from_rgb(0x8b, 0x90, 0xa5),
-            accent: Color32::from_rgb(0x5b, 0x8c, 0xff),
-            accent_end: Color32::from_rgb(0x9b, 0x6b, 0xff),
+            muted: Color32::from_rgb(0xa7, 0xb2, 0xc5),
+            accent: Color32::from_rgb(0x78, 0xb1, 0xff),
+            accent_end: Color32::from_rgb(0x86, 0xc9, 0xff),
             green: Color32::from_rgb(0x3d, 0xdc, 0x97),
             amber: Color32::from_rgb(0xff, 0xb5, 0x47),
             red: Color32::from_rgb(0xff, 0x6b, 0x7a),
@@ -113,7 +117,7 @@ impl Palette {
     }
 
     pub fn of(_ui: &egui::Ui) -> Palette {
-        Palette::glass()
+        Palette::dark()
     }
 }
 
@@ -136,7 +140,7 @@ fn apply(style: &mut egui::Style, p: &Palette) {
     v.dark_mode = true;
     v.override_text_color = Some(p.text);
     v.weak_text_color = Some(p.muted);
-    // The window paints its own gradient.
+    // The window paints its own background.
     v.panel_fill = Color32::TRANSPARENT;
     v.window_fill = Color32::from_rgb(0x1a, 0x1a, 0x2e);
     v.window_stroke = Stroke::new(1.0, p.border);
@@ -232,95 +236,40 @@ fn gradient_rect(
 }
 
 /// A soft light that fades to nothing at `radius`.
-fn glow(painter: &egui::Painter, center: Pos2, radius: f32, color: Color32) {
-    const N: u32 = 48;
-    let mut mesh = egui::Mesh::default();
-    mesh.colored_vertex(center, color);
-    for i in 0..N {
-        let angle = i as f32 / N as f32 * std::f32::consts::TAU;
-        let at = center + Vec2::new(angle.cos(), angle.sin()) * radius;
-        mesh.colored_vertex(at, Color32::TRANSPARENT);
-    }
-    for i in 0..N {
-        mesh.add_triangle(0, 1 + i, 1 + (i + 1) % N);
-    }
-    painter.add(Shape::mesh(mesh));
-}
-
-/// A blurred shadow in `color` behind `rect`.
-fn halo(painter: &egui::Painter, rect: Rect, radius: u8, color: Color32) {
-    let shadow = egui::Shadow { offset: [0, 4], blur: 18, spread: 0, color };
-    painter.add(shadow.as_shape(rect, CornerRadius::same(radius)));
-}
-
-/// The window's background: a dark gradient with two soft coloured lights.
-/// Paint it first each frame, before the panels.
+/// Paint the window surface behind the panels.
 pub fn paint_backdrop(ui: &egui::Ui) {
-    let p = Palette::glass();
-    let rect = ui.ctx().content_rect();
-    let painter = ui.painter();
-    let mut mesh = egui::Mesh::default();
-    mesh.colored_vertex(rect.left_top(), p.top);
-    mesh.colored_vertex(rect.right_top(), p.top);
-    mesh.colored_vertex(rect.right_bottom(), p.bottom);
-    mesh.colored_vertex(rect.left_bottom(), p.bottom);
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
-    painter.add(Shape::mesh(mesh));
-    glow(painter, rect.left_top() + Vec2::new(70.0, 110.0), 260.0, with_alpha(p.accent, 0.20));
-    glow(
-        painter,
-        rect.right_bottom() - Vec2::new(40.0, 170.0),
-        300.0,
-        with_alpha(p.accent_end, 0.17),
-    );
+    ui.painter().rect_filled(ui.ctx().content_rect(), 0.0, Palette::of(ui).top);
 }
 
 // ------------------------------------------------------------- containers
 
-/// A translucent glass panel holding one group of controls.
+/// A panel holding one group of controls.
 pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let p = Palette::of(ui);
-    let out = egui::Frame::new()
+    egui::Frame::new()
         .fill(p.card)
         .stroke(Stroke::new(1.0, p.border))
         .corner_radius(CornerRadius::same(14))
-        .inner_margin(Margin::symmetric(16, 12))
+        .inner_margin(Margin::symmetric(14, 12))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(ui)
-        });
-    // The light catching the top edge.
-    let rect = out.response.rect;
-    ui.painter().line_segment(
-        [rect.left_top() + Vec2::new(16.0, 0.5), rect.right_top() + Vec2::new(-16.0, 0.5)],
-        Stroke::new(1.0, p.shine),
-    );
-    out.inner
+        })
+        .inner
 }
 
-/// A card with a coloured edge and strip, for things that need attention.
+/// A panel for pairing, permissions, or other feedback.
 pub fn notice<R>(ui: &mut egui::Ui, accent: Color32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let p = Palette::of(ui);
-    let out = egui::Frame::new()
-        .fill(mix(Color32::from_rgb(0x14, 0x14, 0x24), accent, 0.10))
+    egui::Frame::new()
+        .fill(mix(Palette::of(ui).top, accent, 0.10))
         .stroke(Stroke::new(1.0, with_alpha(accent, 0.55)))
-        .corner_radius(CornerRadius::same(14))
-        .inner_margin(Margin { left: 20, right: 16, top: 12, bottom: 12 })
+        .corner_radius(CornerRadius::same(12))
+        .inner_margin(Margin::same(12))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(ui)
-        });
-    let rect = out.response.rect;
-    ui.painter().line_segment(
-        [rect.left_top() + Vec2::new(8.0, 14.0), rect.left_bottom() + Vec2::new(8.0, -14.0)],
-        Stroke::new(3.0, accent),
-    );
-    ui.painter().line_segment(
-        [rect.left_top() + Vec2::new(16.0, 0.5), rect.right_top() + Vec2::new(-16.0, 0.5)],
-        Stroke::new(1.0, p.shine),
-    );
-    out.inner
+        })
+        .inner
 }
 
 /// The small muted title above a card.
@@ -339,6 +288,11 @@ pub fn row<R>(
     label: &str,
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> (Response, R) {
+    if ui.available_width() < 385.0 {
+        let label = ui.label(label);
+        let inner = ui.horizontal_wrapped(add).inner;
+        return (label, inner);
+    }
     ui.horizontal(|ui| {
         ui.set_min_height(32.0);
         let label = ui.label(label);
@@ -414,9 +368,6 @@ fn draw_button(
             } else {
                 (mix(p.red, Color32::BLACK, 0.25), mix(p.red, Color32::BLACK, 0.45))
             };
-            if hover > 0.0 {
-                halo(&painter, rect, 12, with_alpha(a, 0.38 * hover * dim));
-            }
             gradient_rect(
                 &painter,
                 rect,
@@ -424,7 +375,8 @@ fn draw_button(
                 shade(a).gamma_multiply(dim),
                 shade(b).gamma_multiply(dim),
             );
-            (Color32::WHITE.gamma_multiply(dim), Color32::from_white_alpha((40.0 * dim) as u8))
+            let text = if kind == Kind::Primary { p.top } else { Color32::WHITE };
+            (text.gamma_multiply(dim), Color32::from_white_alpha((40.0 * dim) as u8))
         }
         Kind::Secondary => {
             let fill = mix(p.field, p.field_hover, hover);
@@ -498,10 +450,13 @@ pub fn segmented<T: PartialEq + Copy>(
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
         let hover = anim(ui, item.id.with("hover"), enabled && item.hovered());
-        let color = if selected { Color32::WHITE } else { mix(p.muted, p.text, hover) };
+        let color = if selected { p.top } else { mix(p.muted, p.text, hover) };
         let color = if enabled { color } else { color.gamma_multiply(0.5) };
         let galley = text_galley(ui, semibold(label).size(13.0).color(color));
         painter.galley(rects[i].center() - galley.size() / 2.0, galley, color);
+        if item.has_focus() {
+            painter.rect_stroke(rects[i], 7, Stroke::new(2.0, p.text), StrokeKind::Inside);
+        }
         if item.clicked() && !selected {
             changed = Some(option);
         }
@@ -556,6 +511,9 @@ pub fn tabs<T: PartialEq + Copy>(ui: &mut egui::Ui, value: &mut T, options: &[(T
                 p.accent_end,
             );
         }
+        if item.has_focus() {
+            painter.rect_stroke(item_rect, 5, Stroke::new(2.0, p.accent), StrokeKind::Inside);
+        }
         if item.clicked() && !selected {
             changed = Some(option);
         }
@@ -609,11 +567,14 @@ pub fn switch(ui: &mut egui::Ui, on: &mut bool, label: &str) -> Response {
             );
         }
         painter.circle_filled(center, 9.5, Color32::WHITE.gamma_multiply(dim));
+        if response.has_focus() {
+            painter.rect_stroke(rect, radius, Stroke::new(2.0, p.accent), StrokeKind::Outside);
+        }
     }
     response
 }
 
-/// A text field in a glass frame. The frame is the same size whether or not
+/// A text field with a focus outline. The frame is the same size whether or not
 /// the pointer is over it or it has focus; only its colours change.
 pub fn text_field(
     ui: &mut egui::Ui,
@@ -624,7 +585,10 @@ pub fn text_field(
 ) -> Response {
     let p = Palette::of(ui);
     let height = if style == TextStyle::Heading { 42.0 } else { 32.0 };
-    let (rect, frame) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+    let (rect, frame) = ui.allocate_exact_size(
+        Vec2::new(width.min(ui.available_width()).max(24.0), height),
+        Sense::hover(),
+    );
     let radius = CornerRadius::same(9);
     let hover = anim(ui, frame.id.with("hover"), ui.rect_contains_pointer(rect));
     ui.painter().rect_filled(rect, radius, mix(p.field, p.field_hover, hover * 0.6));
@@ -666,159 +630,62 @@ pub enum Link {
     Remote,
 }
 
-/// A small rounded badge with the link's state, a pulsing dot while waiting.
-pub fn status_pill(ui: &mut egui::Ui, link: Link) {
+/// A static indicator beside the connection status.
+pub fn status_indicator(ui: &mut egui::Ui, link: Link) {
     let p = Palette::of(ui);
-    let (text, color) = match link {
-        Link::Off => ("Kapalı", p.muted),
-        Link::Waiting => ("Bekleniyor", p.amber),
-        Link::Connected => ("Bağlı", p.green),
-        Link::Remote => ("Kontrol karşıda", p.accent),
-    };
-    let galley = text_galley(ui, semibold(text).size(12.0).color(color));
-    let size = Vec2::new(galley.size().x + 36.0, 26.0);
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(13), with_alpha(color, 0.14));
-    painter.rect_stroke(
-        rect,
-        CornerRadius::same(13),
-        Stroke::new(1.0, with_alpha(color, 0.35)),
-        StrokeKind::Inside,
-    );
-    let dot = Pos2::new(rect.left() + 14.0, rect.center().y);
-    painter.circle_filled(dot, 3.5, color);
-    if link == Link::Waiting {
-        let phase = (ui.input(|i| i.time) as f32 * 1.1).fract();
-        painter.circle_stroke(
-            dot,
-            3.5 + 7.0 * phase,
-            Stroke::new(1.5, with_alpha(color, 0.6 * (1.0 - phase))),
-        );
-        ui.ctx().request_repaint_after(Duration::from_millis(33));
-    }
-    painter.galley(
-        Pos2::new(rect.left() + 25.0, rect.center().y - galley.size().y / 2.0),
-        galley,
-        color,
-    );
-}
-
-/// Two monitors side by side, the other computer on the side it sits, with
-/// the link between them.
-pub fn monitors(ui: &mut egui::Ui, peer_left: bool, link: Link, this: &str, peer: &str) {
-    let p = Palette::of(ui);
-    let height = 132.0;
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::hover());
-    let painter = ui.painter_at(rect.expand(24.0).intersect(ui.clip_rect()));
-    let time = ui.input(|i| i.time) as f32;
-
-    let screen = Vec2::new(108.0, 66.0);
-    let gap = 92.0;
-    let total = screen.x * 2.0 + gap;
-    let left = rect.center().x - total / 2.0;
-    let top = rect.top() + 6.0;
-    let left_rect = Rect::from_min_size(Pos2::new(left, top), screen);
-    let right_rect = Rect::from_min_size(Pos2::new(left + screen.x + gap, top), screen);
-    let (peer_rect, this_rect) =
-        if peer_left { (left_rect, right_rect) } else { (right_rect, left_rect) };
-
-    let line_color = match link {
-        Link::Off => Color32::from_white_alpha(40),
+    let color = match link {
+        Link::Off => p.muted,
         Link::Waiting => p.amber,
         Link::Connected => p.green,
         Link::Remote => p.accent,
     };
-    // The link, drawn first so the monitors sit on top of its ends.
-    let y = left_rect.center().y;
-    let (x0, x1) = (left_rect.right() + 8.0, right_rect.left() - 8.0);
-    match link {
-        Link::Off => dashes(&painter, x0, x1, y, 0.0, line_color),
-        Link::Waiting => {
-            // Dashes marching towards the other computer.
-            let direction = if peer_left { -1.0 } else { 1.0 };
-            dashes(&painter, x0, x1, y, time * 14.0 * direction, line_color);
-            ui.ctx().request_repaint_after(Duration::from_millis(33));
-        }
-        Link::Connected | Link::Remote => {
-            painter.line_segment(
-                [Pos2::new(x0, y), Pos2::new(x1, y)],
-                Stroke::new(7.0, with_alpha(line_color, 0.16)),
-            );
-            painter
-                .line_segment([Pos2::new(x0, y), Pos2::new(x1, y)], Stroke::new(2.5, line_color));
-            painter.circle_filled(Pos2::new(x0, y), 4.0, line_color);
-            painter.circle_filled(Pos2::new(x1, y), 4.0, line_color);
-            if link == Link::Remote {
-                // A light travelling from this computer to the other.
-                let t = (time * 0.9).fract();
-                let (from, to) = if peer_left { (x1, x0) } else { (x0, x1) };
-                painter.circle_filled(Pos2::new(egui::lerp(from..=to, t), y), 3.0, Color32::WHITE);
-                ui.ctx().request_repaint_after(Duration::from_millis(33));
-            }
-        }
-    }
-
-    // Where keyboard and mouse are: lit up in the accent colour.
-    let active_peer = link == Link::Remote;
-    let active_this = link == Link::Connected;
-    for (r, active, name, caption) in [
-        (this_rect, active_this, this, "Bu bilgisayar"),
-        (peer_rect, active_peer, peer, "Diğer bilgisayar"),
-    ] {
-        let lit = anim(ui, ui.scope_id().with(("monitor", caption)), active);
-        if lit > 0.0 {
-            halo(&painter, r, 8, with_alpha(p.accent, 0.45 * lit));
-        }
-        let fill = mix(Color32::from_white_alpha(16), with_alpha(p.accent, 0.22), lit);
-        painter.rect_filled(r, CornerRadius::same(8), fill);
-        // A faint glare across the glass.
-        painter.line_segment(
-            [r.left_top() + Vec2::new(10.0, 1.0), r.right_top() + Vec2::new(-10.0, 1.0)],
-            Stroke::new(1.0, p.shine),
-        );
-        painter.rect_stroke(
-            r,
-            CornerRadius::same(8),
-            Stroke::new(1.5, mix(Color32::from_white_alpha(46), p.accent, lit)),
-            StrokeKind::Inside,
-        );
-        // Stand.
-        let neck =
-            Rect::from_center_size(Pos2::new(r.center().x, r.bottom() + 5.0), Vec2::new(10.0, 8.0));
-        painter.rect_filled(neck, 0.0, Color32::from_white_alpha(34));
-        let foot = Rect::from_center_size(
-            Pos2::new(r.center().x, r.bottom() + 10.0),
-            Vec2::new(40.0, 3.0),
-        );
-        painter.rect_filled(foot, CornerRadius::same(2), Color32::from_white_alpha(34));
-
-        painter.text(
-            Pos2::new(r.center().x, r.bottom() + 20.0),
-            egui::Align2::CENTER_TOP,
-            name,
-            FontId::new(13.0, FontFamily::Name(SEMIBOLD_FAMILY.into())),
-            p.text,
-        );
-        painter.text(
-            Pos2::new(r.center().x, r.bottom() + 37.0),
-            egui::Align2::CENTER_TOP,
-            caption,
-            FontId::proportional(11.0),
-            p.muted,
-        );
-    }
+    let (rect, _) = ui.allocate_exact_size(Vec2::splat(12.0), Sense::hover());
+    ui.painter().circle_filled(rect.center(), 4.0, color);
 }
 
-/// A dashed line from `x0` to `x1`, the dashes shifted by `offset`.
-fn dashes(painter: &egui::Painter, x0: f32, x1: f32, y: f32, offset: f32, color: Color32) {
-    let period = 11.0;
-    let mut x = x0 - offset.rem_euclid(period);
-    while x < x1 {
-        let (a, b) = (x.max(x0), (x + 6.0).min(x1));
-        if b > a {
-            painter.line_segment([Pos2::new(a, y), Pos2::new(b, y)], Stroke::new(2.0, color));
-        }
-        x += period;
+/// Two monitors side by side, the other computer on the side it sits, with
+/// the link between them.
+pub fn monitors(ui: &mut egui::Ui, peer_left: bool, link: Link) {
+    let p = Palette::of(ui);
+    let width = ui.available_width().min(360.0);
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 108.0), Sense::hover());
+    let painter = ui.painter_at(rect);
+    let gap = (width * 0.21).min(72.0);
+    let screen = Vec2::new((width - gap) / 2.0, 62.0);
+    let left = rect.center().x - width / 2.0;
+    let top = rect.top() + 4.0;
+    let left_rect = Rect::from_min_size(Pos2::new(left, top), screen);
+    let right_rect = Rect::from_min_size(Pos2::new(left + screen.x + gap, top), screen);
+    let line = match link {
+        Link::Off => p.border,
+        Link::Waiting => p.amber,
+        Link::Connected => p.green,
+        Link::Remote => p.accent,
+    };
+    let y = left_rect.center().y;
+    painter.line_segment(
+        [Pos2::new(left_rect.right(), y), Pos2::new(right_rect.left(), y)],
+        Stroke::new(2.0, line),
+    );
+    for (screen, peer) in [(left_rect, peer_left), (right_rect, !peer_left)] {
+        let active = (peer && link == Link::Remote) || (!peer && link == Link::Connected);
+        let (fill, outline) =
+            if active { (with_alpha(line, 0.22), line) } else { (p.field, p.border) };
+        painter.rect_filled(screen, 8, fill);
+        painter.rect_stroke(screen, 8, Stroke::new(1.5, outline), StrokeKind::Inside);
+        painter.line_segment(
+            [
+                screen.center_bottom() + Vec2::new(-12.0, 8.0),
+                screen.center_bottom() + Vec2::new(12.0, 8.0),
+            ],
+            Stroke::new(2.0, outline),
+        );
+        painter.text(
+            screen.center_bottom() + Vec2::new(0.0, 14.0),
+            egui::Align2::CENTER_TOP,
+            if peer { "Diğer bilgisayar" } else { "Bu bilgisayar" },
+            FontId::proportional(12.0),
+            p.muted,
+        );
     }
 }

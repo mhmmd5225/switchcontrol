@@ -13,16 +13,16 @@ Her gönderimde GitHub Actions programı gerçek Mac ve Windows makinelerinde de
 
 Program argümansız açılınca (ör. Finder'dan çift tıklayınca) bir pencere açar. Pencerede:
 
-- **Diğer bilgisayar**: öteki bilgisayar bu ekranın solunda mı sağında mı.
-- **Bağlantı**: bir taraf *Bağlantı bekle*, diğeri *Bağlan* seçer. Bekleyen taraf kendini yerel ağda duyurur; bağlanan tarafta *Ağda bulunanlar* listesinde görünür, *Seç* ile adresi dolar (ya da adres elle yazılır). Eşleşmiş bir bilgisayar için adres boş bırakılabilir: IP'si değişse de ağda bulunup kendiliğinden bağlanılır. Bekleyen tarafta *Ağda görünür ol* kapatılırsa duyuru yapılmaz.
-- **Başlat / Durdur**: başlık satırı durumu gösterir (bekleniyor, bağlanılıyor, bağlı, klavye ve fare karşı tarafta).
+- **Hızlı bağlantı** bölümünde bir tarafta *Bağlantı bekle* ve *Beklemeyi başlat*, diğer tarafta *Bağlan* ve *Bağlantıyı başlat* seçilir. Bağlanacak bilgisayarı *Ağdaki bilgisayarlar* listesinden seçebilir veya adresini elle girebilirsiniz. Eşleşmiş bir bilgisayarı ağda otomatik bulmak için adresi boş bırakın. *Ağda görünür ol* ayarı bekleyen bilgisayarın ağda duyurulmasını yönetir.
+- **Ekran düzeni** bölümünde diğer bilgisayarın solda mı sağda mı olduğunu seçin. Pencere daralınca bölümler alt alta gelir ve içerik kaydırılabilir. Başlatma ve durdurma düğmesi pencerenin altında kalır.
+- Bağlantı durumu ve bağlı bilgisayarın adı ekranın üstünde görünür. *Durdur* paylaşımı sonlandırır.
 - **Geçiş**: *Kenara değince* hemen geçer; *Kısa itince* / *Uzun itince* imlecin kenara 0,3 / 0,6 saniye itilmesini bekler (kenardaki kaydırma çubuğu ve düğmelerde yanlışlıkla geçmeyi önler).
 - **Pano paylaşımı**: imleç diğer bilgisayara geçerken kopyalanan metin de oraya aktarılır; geri dönerken o tarafta kopyalanan metin geri gelir (en fazla 1 MB, yalnızca metin).
 - **Kenar çubuğu**: imleç diğer bilgisayara açılan kenara yaklaşınca orada parlayan bir çubuk belirir; itildikçe ortadan dolar. Çubuk tıklamaları engellemez.
 - **Eşleştirme**: ilk bağlantıda bekleyen tarafın penceresinde 6 haneli PIN çıkar, bağlanan tarafın penceresinde PIN sorulur.
 - **Günlük**: ayrıntılı kayıtlar.
 
-Ayarlar *Başlat*'a basınca veri klasöründeki `settings.toml` dosyasına kaydedilir (`--config` ile aynı biçim).
+Ayarlar *Beklemeyi başlat* veya *Bağlantıyı başlat* seçildiğinde veri klasöründeki `settings.toml` dosyasına kaydedilir (`--config` ile aynı biçim).
 
 ### Simge ve otomatik başlama
 
