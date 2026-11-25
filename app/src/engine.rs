@@ -319,6 +319,15 @@ impl Out<'_> {
                     }
                 }
             },
+            Action::PlaceCursor { x, y } => {
+                if let Some(injector) = self.io.injector.as_mut() {
+                    if let Err(error) = injector.place_cursor(x, y) {
+                        self.log(format!("could not place cursor at ({x}, {y}): {error}"));
+                    }
+                } else if self.settings.verbose {
+                    self.log(format!("place cursor at ({x}, {y})"));
+                }
+            }
             Action::Grab(on) => {
                 match &self.io.capture {
                     Some(capture) => {

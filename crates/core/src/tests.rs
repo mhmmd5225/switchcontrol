@@ -53,9 +53,24 @@ fn injected(actions: &[Action]) -> Vec<InputEvent> {
         .iter()
         .filter_map(|a| match a {
             Action::Inject(e) => Some(*e),
+            Action::PlaceCursor { x, y } => Some(moved(*x, *y)),
             _ => None,
         })
         .collect()
+}
+
+#[test]
+fn handoff_avoids_a_gap_between_destination_displays() {
+    let mut pc = pc();
+    pc.peer_connected(Hello {
+        screens: vec![
+            Rect { left: 0, top: 0, right: 1512, bottom: 400 },
+            Rect { left: 0, top: 600, right: 1512, bottom: 1000 },
+        ],
+        ..mac().hello()
+    });
+
+    assert_eq!(sent(&pc.local_input(moved(2559, 720))), vec![Message::Enter { x: 0, y: 600 }]);
 }
 
 #[test]
@@ -237,7 +252,7 @@ fn receiver_ignores_input_until_entered() {
     assert!(mac.peer_message(Message::Key { usage: 0x04, down: true }).is_empty());
 
     let actions = mac.peer_message(Message::Enter { x: 0, y: 491 });
-    assert_eq!(injected(&actions), vec![moved(0, 491)]);
+    assert!(actions.contains(&Action::PlaceCursor { x: 0, y: 491 }));
     let actions = mac.peer_message(Message::MouseMove { x: 10, y: 10 });
     assert_eq!(injected(&actions), vec![moved(10, 10)]);
 }

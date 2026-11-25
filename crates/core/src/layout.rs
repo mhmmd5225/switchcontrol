@@ -55,6 +55,14 @@ pub fn on_edge(screens: &[Rect], side: Side, x: i32, y: i32) -> bool {
     at_edge && edge_screens(screens, side).any(|r| r.top <= y && y < r.bottom)
 }
 
+/// Keep a mapped row on a display that actually touches this edge.
+pub(crate) fn edge_row(screens: &[Rect], side: Side, y: i32) -> i32 {
+    edge_screens(screens, side)
+        .map(|r| y.clamp(r.top, r.bottom - 1))
+        .min_by_key(|row| row.abs_diff(y))
+        .unwrap_or(y)
+}
+
 /// Maps `y` from one vertical span onto another, keeping its relative height.
 pub fn map_span(y: i32, from: (i32, i32), to: (i32, i32)) -> i32 {
     let frac = (y - from.0) as f64 / (from.1 - from.0).max(1) as f64;

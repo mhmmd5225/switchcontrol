@@ -23,18 +23,26 @@ pub struct Injector {
 impl Injector {
     /// Injected events are tagged so this process's own capture ignores them.
     pub fn new() -> Self {
-        Self { desktop: virtual_desktop(), marker: INJECT_MARKER }
+        Self::with_marker(INJECT_MARKER)
+    }
+
+    pub(super) fn with_marker(marker: usize) -> Self {
+        Self { desktop: virtual_desktop(), marker }
     }
 
     /// Injected events look like any other software input to our capture.
     /// Only useful for self-tests of the capture path.
     pub fn untagged() -> Self {
-        Self { desktop: virtual_desktop(), marker: 0 }
+        Self::with_marker(0)
     }
 
     /// Re-reads monitor geometry; call after a display configuration change.
     pub fn refresh_geometry(&mut self) {
         self.desktop = virtual_desktop();
+    }
+
+    pub fn place_cursor(&mut self, x: i32, y: i32) -> io::Result<()> {
+        self.inject(&InputEvent::MouseMove { x, y })
     }
 
     pub fn inject(&mut self, ev: &InputEvent) -> io::Result<()> {

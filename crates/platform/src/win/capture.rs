@@ -135,6 +135,9 @@ const WM_SC_GRAB: u32 = WM_APP + 1;
 /// Side of the square window that hides the parked cursor.
 const COVER_SIZE: i32 = 64;
 
+/// Identifies the specific move that establishes the grab origin.
+const PARK_MARKER: usize = 0x5343_504B;
+
 fn begin_grab(cover: HWND) {
     let (x, y) = park_point();
     let half = COVER_SIZE / 2;
@@ -151,7 +154,7 @@ fn begin_grab(cover: HWND) {
     }
     // Lands on the cover, which switches to its empty cursor. The hook
     // records where this tagged move actually ends up as the parking spot.
-    let _ = Injector::new().inject(&InputEvent::MouseMove { x, y });
+    let _ = Injector::with_marker(PARK_MARKER).inject(&InputEvent::MouseMove { x, y });
 }
 
 fn end_grab(cover: HWND) {
@@ -315,8 +318,12 @@ fn handle_mouse(msg: u32, info: &MSLLHOOKSTRUCT) -> bool {
         let Some(s) = state else { return false };
         let grabbing = s.shared.grab.load(Ordering::SeqCst);
 
-        if info.dwExtraInfo == INJECT_MARKER {
-            if grabbing && msg == WM_MOUSEMOVE && !s.shared.parked.load(Ordering::SeqCst) {
+        if matches!(info.dwExtraInfo, INJECT_MARKER | PARK_MARKER) {
+            if info.dwExtraInfo == PARK_MARKER
+                && grabbing
+                && msg == WM_MOUSEMOVE
+                && !s.shared.parked.load(Ordering::SeqCst)
+            {
                 s.shared.park_x.store(info.pt.x, Ordering::SeqCst);
                 s.shared.park_y.store(info.pt.y, Ordering::SeqCst);
                 s.shared.parked.store(true, Ordering::SeqCst);

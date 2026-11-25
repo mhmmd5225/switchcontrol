@@ -38,6 +38,23 @@ impl Injector {
         }
     }
 
+    pub fn place_cursor(&mut self, x: i32, y: i32) -> io::Result<()> {
+        let point = CGPoint { x: x as f64, y: y as f64 };
+        // A handoff changes the absolute location without a synthetic delta
+        // from wherever the Mac cursor was left during the previous session.
+        let status = unsafe { CGWarpMouseCursorPosition(point) };
+        if status != 0 {
+            return self.mouse_move(point);
+        }
+        let event = unsafe {
+            CGEventCreateMouseEvent(ptr::null_mut(), kCGEventMouseMoved, point, kCGMouseButtonLeft)
+        };
+        self.post(event, |e| unsafe {
+            CGEventSetIntegerValueField(e, kCGMouseEventDeltaX, 0);
+            CGEventSetIntegerValueField(e, kCGMouseEventDeltaY, 0);
+        })
+    }
+
     pub fn inject(&mut self, ev: &InputEvent) -> io::Result<()> {
         match *ev {
             InputEvent::MouseMove { x, y } => self.mouse_move(CGPoint { x: x as f64, y: y as f64 }),

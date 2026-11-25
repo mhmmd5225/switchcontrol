@@ -153,6 +153,7 @@ unsafe extern "C" {
     pub fn CGEventSetFlags(event: CGEventRef, flags: CGEventFlags);
     pub fn CGEventSetType(event: CGEventRef, ty: CGEventType);
 
+    pub fn CGWarpMouseCursorPosition(position: CGPoint) -> CGError;
     pub fn CGAssociateMouseAndMouseCursorPosition(connected: u32) -> CGError;
     pub fn CGGetActiveDisplayList(
         max_displays: u32,

@@ -30,6 +30,12 @@ Windows'ta bildirim alanında, Mac'te menü çubuğunda bir SwitchControl simges
 
 *Uygulama > Oturum açılınca başlat* açıksa SwitchControl oturum açılınca simge olarak başlar ve kayıtlı ayarlarla bağlanır. Windows'ta kullanıcının başlangıç kaydına (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`), Mac'te `~/Library/LaunchAgents/com.switchcontrol.app.plist` dosyasına yazılır. Uygulamayı başka bir klasöre taşırsanız anahtarı kapatıp yeniden açın.
 
+### Otomatik güncelleme
+
+Windows ve Apple Silicon macOS için GitHub Releases üzerinden kurulan sürümler güncellemeleri arka planda denetler. Yeni paket doğrulandıktan sonra paylaşım durunca uygulama kendini günceller ve yeniden açılır. Kurulum klasörüne yazma izni gerekir. **Ayarlar > Uygulama > Otomatik güncelleme** seçeneğiyle özelliği kapatabilirsiniz.
+
+macOS paketi yerel olarak imzalandığından sistem, güncellemeden sonra Erişilebilirlik ve Girdi İzleme izinlerini yeniden vermenizi isteyebilir.
+
 ### Mac uygulaması
 
 Mac'te depo klasöründe:

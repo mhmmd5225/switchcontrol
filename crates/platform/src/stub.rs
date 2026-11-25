@@ -63,6 +63,10 @@ impl Injector {
         Injector
     }
 
+    pub fn place_cursor(&mut self, x: i32, y: i32) -> io::Result<()> {
+        self.inject(&InputEvent::MouseMove { x, y })
+    }
+
     pub fn inject(&mut self, _ev: &InputEvent) -> io::Result<()> {
         Err(unsupported())
     }

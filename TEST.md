@@ -101,7 +101,13 @@ Aşağıda klavye ve farenin W'ye bağlı olduğu varsayıldı. Mac'in klavyesin
 - Aynı makinelerde eski ve yeni `release` derlemelerini ayrı çalıştırın. Pencere açık ve bağlantısız, pencere açık ve bağlantı beklerken, simgede gizli ve bağlı beklerken, son olarak bağlı ve sürekli fare aktarırken ölçüm alın. Her durumda 30 saniye ısındıktan sonra 60 saniyelik üç örnek alın.
 - İşlem CPU süresini ve bellek değerini kaydedin. Windows için özel çalışma kümesini, macOS için fiziksel bellek ayak izini kullanın. Belleğin birikmediğini kontrol etmek için aynı koşullarda 20 başlatma, bağlanma ve durdurma döngüsünden sonra tekrar ölçün. Aktif aktarımda tuşların bırakıldığını ve acil dönüş kısayolunu da kontrol edin.
 
-## 8. Gönderilecekler
+## 8. Otomatik güncelleme
+
+- Windows ve Apple Silicon Mac'te güncelleme modülü bulunan eski bir kararlı sürümü yazılabilir bir klasöre kurun. GitHub'da daha yeni bir kararlı sürüm yayımlandığında eski uygulamayı açın. Paylaşım kapalıyken yeni sürüm kurulup uygulama yeniden açılmalı.
+- Aynı testi paylaşım açıkken yapın. **Ayarlar > Uygulama** altında güncellemenin hazır olduğu görünmeli ve bağlantı devam etmeli. **Durdur** düğmesine basınca kurulum başlamalı.
+- Yeni sürümde ayarların ve eşleşmelerin korunduğunu doğrulayın. **Otomatik güncelleme** seçeneğini kapatın, uygulamayı yeniden açın ve ayarın kapalı kaldığını kontrol edin. macOS yeni paket için izin isterse Erişilebilirlik ve Girdi İzleme izinlerini yeniden verin.
+
+## 9. Gönderilecekler
 
 - Hangi adımlar beklendiği gibi, hangileri değil (numaraları yeterli).
 - Sorunlu adımların ekran görüntüsü ve iki taraftaki **Günlük** içeriği.

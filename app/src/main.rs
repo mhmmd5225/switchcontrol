@@ -24,6 +24,7 @@ mod pairing;
 mod theme;
 mod tls;
 mod tray;
+mod update;
 
 use std::process::ExitCode;
 use std::sync::{Arc, mpsc};
@@ -33,17 +34,21 @@ use engine::{Engine, Report};
 use net::PinSource;
 
 fn main() -> ExitCode {
+    let os_args: Vec<_> = std::env::args_os().skip(1).collect();
+    if let Some(result) = update::helper_command(&os_args) {
+        return if result.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    }
+    if let [flag, stage] = os_args.as_slice()
+        && flag == "--finish-update"
+    {
+        let failed = update::finish(std::path::Path::new(stage));
+        return run_gui(false, failed);
+    }
     // Old macOS versions pass a process serial number to apps started from Finder.
     let args: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with("-psn_")).collect();
     let at_login = args == [autostart::ARG];
     if args.is_empty() || args == ["--gui"] || at_login {
-        return match gui::run(at_login) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("error: {e}");
-                ExitCode::FAILURE
-            }
-        };
+        return run_gui(at_login, false);
     }
 
     attach_console();
@@ -101,3 +106,13 @@ fn attach_console() {
 
 #[cfg(not(windows))]
 fn attach_console() {}
+
+fn run_gui(at_login: bool, update_failed: bool) -> ExitCode {
+    match gui::run(at_login, update_failed) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}

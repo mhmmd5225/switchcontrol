@@ -26,6 +26,7 @@ use crate::net::{self, PinSource, Waiting};
 use crate::pairing::normalize_pin;
 use crate::theme::{self, Kind, Link, Palette};
 use crate::tray::{Tray, TrayCommand};
+use crate::update::Updater;
 
 const SETTINGS_FILE: &str = "settings.toml";
 const LOG_LINES: usize = 500;
@@ -38,7 +39,7 @@ const HOTKEY: &str =
 
 /// Opens the window. `at_login`: started by [`autostart`], so hide in the
 /// tray and start sharing right away.
-pub fn run(at_login: bool) -> Result<(), String> {
+pub fn run(at_login: bool, update_failed: bool) -> Result<(), String> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("SwitchControl")
@@ -58,6 +59,7 @@ pub fn run(at_login: bool) -> Result<(), String> {
         options,
         Box::new(move |cc| {
             let mut app = GuiApp::new(cc.egui_ctx.clone(), data_dir, dry_run);
+            app.updater = Updater::new(&app.data_dir, update_failed);
             match Tray::new(&cc.egui_ctx) {
                 Ok(tray) => app.tray = Some(tray),
                 Err(e) => app.push_log(format!("no tray icon: {e}")),
@@ -204,6 +206,7 @@ pub struct GuiApp {
     quitting: bool,
     /// Whether the OS starts SwitchControl at login.
     autostart: bool,
+    updater: Option<Updater>,
 }
 
 impl GuiApp {
@@ -238,6 +241,7 @@ impl GuiApp {
             hide_on_first_frame: false,
             quitting: false,
             autostart: autostart::is_enabled(),
+            updater: None,
         }
     }
 
@@ -301,6 +305,7 @@ impl GuiApp {
         }
         if self.strip_for != Some(self.form.side) {
             self.strip_for = Some(self.form.side);
+            EdgeBar::reset_placement(ctx);
             let scale = if cfg!(windows) { ctx.pixels_per_point() } else { 1.0 };
             let screens: Vec<_> = sys::monitors().into_iter().map(|m| m.bounds).collect();
             self.strip = Strip::new(&screens, self.form.side, scale);
@@ -752,6 +757,21 @@ impl GuiApp {
                     Err(e) => self.error = Some(format!("Otomatik başlatma ayarlanamadı: {e}")),
                 }
             }
+            if let Some(updater) = &mut self.updater {
+                theme::divider(ui);
+                let label = "Otomatik güncelleme";
+                let mut enabled = updater.enabled;
+                let (_, switch) =
+                    theme::row(ui, label, |ui| theme::switch(ui, &mut enabled, label));
+                if switch.changed()
+                    && let Err(error) = updater.set_enabled(enabled)
+                {
+                    updater.status = format!("Güncelleme ayarı kaydedilemedi: {error}");
+                }
+                if !updater.status.is_empty() {
+                    ui.label(RichText::new(&updater.status).small().weak());
+                }
+            }
             if self.tray.is_some() {
                 ui.label(
                     RichText::new("Pencereyi kapatınca simgeye iner; çıkış simgenin menüsünde.")
@@ -823,6 +843,16 @@ impl eframe::App for GuiApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll();
         self.tray_logic(ctx);
+        if !self.quitting
+            && let Some(updater) = &mut self.updater
+            && let Some(lock) = updater.poll(ctx, self.running.is_none())
+        {
+            // Keep the installation locked until the OS tears down this process.
+            static UPDATE_LOCK: std::sync::OnceLock<std::fs::File> = std::sync::OnceLock::new();
+            let _ = UPDATE_LOCK.set(lock);
+            self.quitting = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
         let hidden = self.window_hidden(ctx);
         self.update_discovery(!hidden);
         if hidden && self.wants_edge_bar() && self.strip_for.is_none() {
@@ -832,6 +862,9 @@ impl eframe::App for GuiApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if self.quitting {
+            return;
+        }
         if self.window_hidden(ui.ctx()) {
             self.edge_bar_ui(ui.ctx());
             return;

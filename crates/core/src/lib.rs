@@ -17,7 +17,7 @@ use sc_keymap::swap_ctrl_gui;
 use sc_proto::{Hello, InputEvent, Message, MouseButton, Os, PROTOCOL_VERSION, Rect};
 
 pub use layout::Side;
-use layout::{clamp_to_screens, map_span, on_edge};
+use layout::{clamp_to_screens, edge_row, map_span, on_edge};
 pub use layout::{edge_span, edge_x};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,6 +57,11 @@ pub struct EdgeHint {
 pub enum Action {
     Send(Message),
     Inject(InputEvent),
+    /// Place the cursor when control crosses between machines.
+    PlaceCursor {
+        x: i32,
+        y: i32,
+    },
     /// Start or stop swallowing local input. Starting must also release, on
     /// this machine, whatever keys are held at that moment: their key-ups
     /// will be swallowed.
@@ -224,7 +229,7 @@ impl Node {
                     self.leave_remote(&mut out, true, None);
                 }
                 self.controlled = true;
-                out.push(Action::Inject(InputEvent::MouseMove { x, y }));
+                out.push(Action::PlaceCursor { x, y });
                 out.push(Action::Log("peer took control".into()));
             }
             Message::Leave => {
@@ -305,10 +310,9 @@ impl Node {
                 return;
             }
         }
+        let peer_y = edge_row(&peer.screens, side.opposite(), map_span(y, from, to));
         self.edge_since = None;
         self.set_hint(None, out);
-
-        let peer_y = map_span(y, from, to);
         out.push(Action::Grab(true));
         out.push(Action::ShareClipboard);
         out.push(Action::Send(Message::Enter { x: peer_x, y: peer_y }));
@@ -399,10 +403,10 @@ impl Node {
                 Side::Left => edge + 1,
                 Side::Right => edge - 1,
             };
-            Some((x, map_span(py, from, to)))
+            Some((x, edge_row(&self.screens, side, map_span(py, from, to))))
         });
         if let Some((x, y)) = target {
-            out.push(Action::Inject(InputEvent::MouseMove { x, y }));
+            out.push(Action::PlaceCursor { x, y });
         }
         out.push(Action::Log("<- back to local".into()));
     }

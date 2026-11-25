@@ -10,7 +10,8 @@ cd "$(dirname "$0")/.."
 cargo build --release -p switchcontrol
 
 app=target/release/SwitchControl.app
-version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+version=${SWITCHCONTROL_VERSION:-$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)}
+version=${version#v}
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/switchcontrol "$app/Contents/MacOS/SwitchControl"

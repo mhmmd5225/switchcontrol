@@ -62,6 +62,21 @@ impl Strip {
         // overlay's own scale for conversions to and from physical pixels.
         self.scale = ctx.pixels_per_point();
         let (outer, inner) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().inner_rect));
+        if outer.is_none() || inner.is_none() {
+            return self;
+        }
+        // Windows may round physical positions and report the old bounds
+        // during a repaint. Reissue the commands only after a DPI change.
+        let id = egui::Id::unique("switchcontrol-edge-placement");
+        let needs_placement = ctx.data_mut(|data| {
+            let current = (self.position(), self.size(), self.scale);
+            let previous = data.get_temp::<(Pos2, egui::Vec2, f32)>(id);
+            data.insert_temp(id, current);
+            previous != Some(current)
+        });
+        if !needs_placement {
+            return self;
+        }
         let tolerance = 1.0 / self.scale;
         if inner.is_some_and(|rect| (rect.size() - self.size()).abs().max_elem() > tolerance) {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(self.size()));
@@ -89,8 +104,16 @@ impl EdgeBar {
         }
     }
 
-    /// Keeps the bar window open; call on every frame of the main window
-    /// while it should exist.
+    /// Forget the previous viewport geometry before starting a new overlay.
+    pub fn reset_placement(ctx: &egui::Context) {
+        ctx.data_mut(|data| {
+            data.remove::<(Pos2, egui::Vec2, f32)>(egui::Id::unique(
+                "switchcontrol-edge-placement",
+            ));
+        });
+    }
+
+    /// Keeps the bar window open while sharing.
     pub fn show(&self, ctx: &egui::Context, strip: Strip) {
         // Without real windows (e.g. in tests) the bar would be an embedded panel.
         if ctx.embed_viewports() {
@@ -102,6 +125,7 @@ impl EdgeBar {
             .with_inner_size(strip.size())
             .with_decorations(false)
             .with_resizable(false)
+            .with_clamp_size_to_monitor_size(false)
             .with_transparent(true)
             .with_has_shadow(false)
             .with_mouse_passthrough(true)
