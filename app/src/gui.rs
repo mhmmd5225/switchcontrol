@@ -43,7 +43,7 @@ pub fn run(at_login: bool, update_failed: bool) -> Result<(), String> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("SwitchControl")
-            .with_inner_size([800.0, 520.0])
+            .with_inner_size([800.0, 460.0])
             .with_min_inner_size(MIN_WINDOW)
             .with_icon(Arc::new(
                 eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icon-256.png"))
@@ -501,12 +501,6 @@ impl GuiApp {
     }
 
     fn header_ui(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(theme::semibold("SwitchControl").size(22.0));
-            if self.dry_run {
-                ui.label(RichText::new("Deneme modu").small().weak());
-            }
-        });
         theme::tabs(
             ui,
             &mut self.page,
@@ -519,7 +513,10 @@ impl GuiApp {
         theme::card(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 theme::status_indicator(ui, link);
-                ui.label(theme::semibold(title).size(20.0));
+                ui.label(theme::semibold(title).size(17.0));
+                if self.dry_run {
+                    ui.label(RichText::new("Deneme modu").small().weak());
+                }
             });
             if !detail.is_empty() {
                 ui.label(RichText::new(detail).weak());
@@ -819,21 +816,35 @@ impl GuiApp {
     fn footer_ui(&mut self, ui: &mut egui::Ui) {
         let running = self.running.is_some();
         let (text, kind) = match (running, self.form.mode) {
-            (true, _) => ("Durdur", Kind::Danger),
+            (true, _) => ("Durdur", Kind::Secondary),
             (false, Mode::Connect) => ("Bağlantıyı başlat", Kind::Primary),
             (false, Mode::Listen) => ("Beklemeyi başlat", Kind::Primary),
         };
-        if theme::big_button(ui, text, kind).clicked() {
-            if running { self.stop() } else { self.start() }
-        }
-        if running {
-            ui.label(
-                RichText::new(format!(
-                    "{HOTKEY} klavye ve fareyi her zaman bu bilgisayara getirir"
-                ))
+        let shortcut = || {
+            RichText::new(format!("{HOTKEY} klavye ve fareyi bu bilgisayara getirir"))
                 .small()
-                .weak(),
-            );
+                .weak()
+        };
+        let clicked = if ui.available_width() < 440.0 {
+            let clicked = theme::action_button(ui, text, kind, ui.available_width()).clicked();
+            if running {
+                ui.label(shortcut());
+            }
+            clicked
+        } else {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let clicked = theme::action_button(ui, text, kind, 148.0).clicked();
+                if running {
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.label(shortcut());
+                    });
+                }
+                clicked
+            })
+            .inner
+        };
+        if clicked {
+            if running { self.stop() } else { self.start() }
         }
     }
 }
@@ -889,10 +900,10 @@ impl eframe::App for GuiApp {
         theme::paint_backdrop(ui);
         if self.page == Page::Connection || self.running.is_some() {
             egui::Panel::bottom("footer")
-                .show_separator_line(false)
+                .show_separator_line(true)
                 .frame(
                     egui::Frame::new()
-                        .fill(Palette::of(ui).top)
+                        .fill(Palette::of(ui).panel)
                         .inner_margin(egui::Margin::symmetric(16, 10)),
                 )
                 .show(ui, |ui| self.footer_ui(ui));
