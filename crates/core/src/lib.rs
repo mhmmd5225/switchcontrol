@@ -82,6 +82,7 @@ enum Mode {
     Remote {
         x: f64,
         y: f64,
+        source_scale: u16,
     },
 }
 
@@ -90,6 +91,7 @@ struct Peer {
     name: String,
     os: Os,
     screens: Vec<Rect>,
+    scale_percent: Vec<u16>,
 }
 
 pub struct Node {
@@ -97,6 +99,7 @@ pub struct Node {
     os: Os,
     name: String,
     screens: Vec<Rect>,
+    scale_percent: Vec<u16>,
     peer: Option<Peer>,
     mode: Mode,
     /// Physical buttons currently held on this machine.
@@ -123,6 +126,7 @@ impl Node {
             os,
             name,
             screens,
+            scale_percent: vec![],
             peer: None,
             mode: Mode::Local,
             local_buttons: BTreeSet::new(),
@@ -136,12 +140,20 @@ impl Node {
         }
     }
 
+    pub fn with_screen_scales(mut self, scales: Vec<u16>) -> Self {
+        if scales.len() == self.screens.len() {
+            self.scale_percent = scales;
+        }
+        self
+    }
+
     pub fn hello(&self) -> Hello {
         Hello {
             version: PROTOCOL_VERSION,
             name: self.name.clone(),
             os: self.os,
             screens: self.screens.clone(),
+            scale_percent: self.scale_percent.clone(),
         }
     }
 
@@ -152,7 +164,12 @@ impl Node {
     pub fn peer_connected(&mut self, hello: Hello) -> Vec<Action> {
         let log =
             format!("connected to {} ({:?}, screens {:?})", hello.name, hello.os, hello.screens);
-        self.peer = Some(Peer { name: hello.name, os: hello.os, screens: hello.screens });
+        self.peer = Some(Peer {
+            name: hello.name,
+            os: hello.os,
+            screens: hello.screens,
+            scale_percent: hello.scale_percent,
+        });
         vec![Action::Log(log)]
     }
 
@@ -317,7 +334,11 @@ impl Node {
         out.push(Action::ShareClipboard);
         out.push(Action::Send(Message::Enter { x: peer_x, y: peer_y }));
         out.push(Action::Log(format!("-> {} at ({peer_x}, {peer_y})", self.peer_name())));
-        self.mode = Mode::Remote { x: peer_x as f64, y: peer_y as f64 };
+        self.mode = Mode::Remote {
+            x: peer_x as f64,
+            y: peer_y as f64,
+            source_scale: screen_scale(&self.screens, &self.scale_percent, edge, y),
+        };
     }
 
     /// The bar for a cursor at (x, y), if it is close to the shared edge.
@@ -355,9 +376,21 @@ impl Node {
     }
 
     fn move_remote(&mut self, dx: i32, dy: i32, out: &mut Vec<Action>) {
-        let (Mode::Remote { x, y }, Some(peer)) = (self.mode, &self.peer) else { return };
-        let nx = x + dx as f64 * self.config.speed;
-        let ny = y + dy as f64 * self.config.speed;
+        let (Mode::Remote { x, y, source_scale }, Some(peer)) = (self.mode, &self.peer) else {
+            return;
+        };
+        let scale = if self.scale_percent.is_empty() || peer.scale_percent.is_empty() {
+            1.0
+        } else {
+            f64::from(screen_scale(
+                &peer.screens,
+                &peer.scale_percent,
+                x.floor() as i32,
+                y.floor() as i32,
+            )) / f64::from(source_scale)
+        };
+        let nx = x + dx as f64 * self.config.speed * scale;
+        let ny = y + dy as f64 * self.config.speed * scale;
 
         // The peer's edge facing us.
         let back = self.config.peer_side.opposite();
@@ -377,7 +410,7 @@ impl Node {
         }
 
         let (cx, cy) = clamp_to_screens(&peer.screens, nx, ny);
-        self.mode = Mode::Remote { x: cx, y: cy };
+        self.mode = Mode::Remote { x: cx, y: cy, source_scale };
         let (px, py) = (cx.floor() as i32, cy.floor() as i32);
         if (px, py) != (x.floor() as i32, y.floor() as i32) {
             out.push(Action::Send(Message::MouseMove { x: px, y: py }));
@@ -442,3 +475,13 @@ fn set<T: Ord>(set: &mut BTreeSet<T>, item: T, present: bool) {
 
 #[cfg(test)]
 mod tests;
+
+fn screen_scale(screens: &[Rect], scales: &[u16], x: i32, y: i32) -> u16 {
+    screens
+        .iter()
+        .zip(scales)
+        .find_map(|(screen, &scale)| {
+            (screen.contains(x, y) && (50..=500).contains(&scale)).then_some(scale)
+        })
+        .unwrap_or(100)
+}

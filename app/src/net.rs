@@ -13,7 +13,9 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use sc_proto::{Auth, Hello, Message, PROTOCOL_VERSION, read_frame, write_frame};
+use sc_proto::{
+    Auth, Hello, Message, PROTOCOL_VERSION, read_frame, read_hello, write_frame, write_hello,
+};
 
 use crate::config::NetMode;
 use crate::discovery::Listener;
@@ -337,11 +339,8 @@ fn session(
         secure.socket().set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
     }
 
-    write_frame(&mut writer, &Message::Hello(hello.clone()))?;
-    let peer = match read_frame(&mut reader)? {
-        Message::Hello(peer) => peer,
-        other => return Err(invalid(format!("expected Hello, got {other:?}"))),
-    };
+    write_hello(&mut writer, hello.clone())?;
+    let peer = read_hello(&mut reader)?;
     if peer.version != PROTOCOL_VERSION {
         return Err(invalid(format!(
             "peer speaks protocol {}, we speak {PROTOCOL_VERSION}",

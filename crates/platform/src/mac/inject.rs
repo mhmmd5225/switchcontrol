@@ -24,7 +24,7 @@ pub struct Injector {
     buttons: BTreeSet<MouseButton>,
     modifiers: BTreeSet<u16>,
     last_click: Option<(MouseButton, Instant, CGPoint, i64)>,
-    /// Wheel amounts below one line, carried over.
+    /// Trackpad scroll amounts below one point, carried over.
     wheel_rest: (i32, i32),
 }
 
@@ -39,6 +39,7 @@ impl Injector {
     }
 
     pub fn place_cursor(&mut self, x: i32, y: i32) -> io::Result<()> {
+        self.wheel_rest = (0, 0);
         let point = CGPoint { x: x as f64, y: y as f64 };
         // A handoff changes the absolute location without a synthetic delta
         // from wherever the Mac cursor was left during the previous session.
@@ -133,23 +134,20 @@ impl Injector {
     }
 
     fn wheel(&mut self, dx: i32, dy: i32) -> io::Result<()> {
-        let (rest_x, rest_y) = (self.wheel_rest.0 + dx, self.wheel_rest.1 + dy);
-        let (lines_x, lines_y) = (rest_x / 120, rest_y / 120);
-        self.wheel_rest = (rest_x - lines_x * 120, rest_y - lines_y * 120);
-        if lines_x == 0 && lines_y == 0 {
+        let (unit, x, y) = if dx % 120 == 0 && dy % 120 == 0 {
+            (kCGScrollEventUnitLine, dx / 120, dy / 120)
+        } else {
+            // Quartz defaults to ten points per line. Keep the remaining
+            // sub-point distance rather than waiting for a full wheel step.
+            let x = crate::scroll::to_points(dx, &mut self.wheel_rest.0);
+            let y = crate::scroll::to_points(dy, &mut self.wheel_rest.1);
+            (kCGScrollEventUnitPixel, x, y)
+        };
+        if x == 0 && y == 0 {
             return Ok(());
         }
         // Wheel 2 is horizontal with positive = left.
-        let event = unsafe {
-            CGEventCreateScrollWheelEvent2(
-                ptr::null_mut(),
-                kCGScrollEventUnitLine,
-                2,
-                lines_y,
-                -lines_x,
-                0,
-            )
-        };
+        let event = unsafe { CGEventCreateScrollWheelEvent2(ptr::null_mut(), unit, 2, y, -x, 0) };
         self.post(event, |_| {})
     }
 

@@ -66,6 +66,8 @@ pub fn monitors() -> Vec<Monitor> {
                     bottom: top + b.size.height.round() as i32,
                 },
                 primary: id == main,
+                // CoreGraphics already reports logical points on Retina displays.
+                scale_percent: 100,
             }
         })
         .collect()

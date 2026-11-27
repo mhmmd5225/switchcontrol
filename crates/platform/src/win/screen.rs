@@ -2,6 +2,7 @@ use windows::Win32::Foundation::{LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
     EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
 };
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
     CURSORINFO, GetCursorInfo, GetCursorPos, GetSystemMetrics, MONITORINFOF_PRIMARY,
     SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
@@ -62,10 +63,19 @@ unsafe extern "system" fn enum_monitor(
     {
         let r = info.monitorInfo.rcMonitor;
         let len = info.szDevice.iter().position(|&c| c == 0).unwrap_or(info.szDevice.len());
+        let (mut dpi_x, mut dpi_y) = (96, 96);
+        let scale_percent =
+            if unsafe { GetDpiForMonitor(hmon, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) }.is_ok()
+            {
+                ((dpi_x * 100 + 48) / 96).clamp(50, 500) as u16
+            } else {
+                100
+            };
         out.push(Monitor {
             name: String::from_utf16_lossy(&info.szDevice[..len]),
             bounds: Rect { left: r.left, top: r.top, right: r.right, bottom: r.bottom },
             primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
+            scale_percent,
         });
     }
     true.into()

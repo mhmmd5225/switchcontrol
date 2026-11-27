@@ -11,6 +11,9 @@
 
 mod event;
 
+#[cfg(any(target_os = "macos", test))]
+mod scroll;
+
 pub use event::{CaptureEvent, Monitor, Permissions};
 pub use sc_proto::{InputEvent, MouseButton, Rect};
 

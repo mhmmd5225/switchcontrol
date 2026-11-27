@@ -75,6 +75,8 @@ pub const kCGMouseEventDeltaX: CGEventField = 4;
 pub const kCGMouseEventDeltaY: CGEventField = 5;
 pub const kCGKeyboardEventKeycode: CGEventField = 9;
 pub const kCGEventSourceUserData: CGEventField = 42;
+pub const kCGScrollWheelEventDeltaAxis1: CGEventField = 11;
+pub const kCGScrollWheelEventDeltaAxis2: CGEventField = 12;
 pub const kCGScrollWheelEventFixedPtDeltaAxis1: CGEventField = 93;
 pub const kCGScrollWheelEventFixedPtDeltaAxis2: CGEventField = 94;
 
@@ -105,6 +107,7 @@ pub const kCGEventTapOptionDefault: u32 = 0;
 pub const kCFStringEncodingUTF8: u32 = 0x0800_0100;
 
 // CGScrollEventUnit
+pub const kCGScrollEventUnitPixel: u32 = 0;
 pub const kCGScrollEventUnitLine: u32 = 1;
 
 // CGMouseButton

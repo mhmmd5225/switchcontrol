@@ -74,7 +74,8 @@ switchcontrol --side left --connect 192.168.1.20
 | `--connect ADDR` | Diğerine bağlan; port verilmezse 24800 |
 | `--name NAME` | Karşıya gösterilen ad (varsayılan bilgisayar adı) |
 | `--speed F` | Karşı ekrandaki imleç hızı çarpanı (varsayılan 1.0) |
-| `--no-swap` | Ctrl ↔ Cmd/Win değişimini kapat |
+| `--swap` | Ctrl ile Command/Windows kısayollarını diğer işletim sistemine uyarla |
+| `--no-swap` | Ctrl ve Command/Windows tuşlarını değiştirmeden aktar (varsayılan) |
 | `--no-clipboard` | Pano paylaşımını kapat |
 | `--no-announce` | Bekleyen tarafta kendini yerel ağda duyurma |
 | `--edge-delay MS` | Geçmeden önce imlecin kenara bu kadar milisaniye itilmesini bekle (varsayılan 0) |
@@ -85,7 +86,9 @@ switchcontrol --side left --connect 192.168.1.20
 | `--dry-run` | Yakalama ve enjeksiyon yapma, sadece logla |
 | `-v` | Gönderilen ve alınan her mesajı logla |
 
-Windows'tan gelen Ctrl, Mac'te Cmd olur (ve tersi). Mac klavyesiyle Windows'u kullanırken Cmd tek başına basılıp bırakılırsa Windows tuşu gibi davranır (Başlat menüsü); başka bir tuşla birlikte (Cmd+C) Ctrl olarak kalır. Tuşlar fiziksel konumlarıyla taşınır, bu yüzden iki makinede de aynı klavye düzeni (ör. Türkçe Q) seçili olmalı.
+Tuşlar fiziksel konumlarıyla taşınır. Aynı karakterlerin yazılması için iki bilgisayarda da aynı klavye düzenini (ör. Türkçe Q) seçin. Kısayolları uyarlamak için alıcı bilgisayarda **Ayarlar > Davranış > Ctrl ve Command kısayollarını uyarla** seçeneğini açın. Önceden kaydedilmiş tercih korunur.
+
+İki tarafta da güncel sürüm varsa imleç aynı hareketi hedef ekranın ölçeğine göre aktarır. `--speed` veya **İmleç hızı** ayarı, bu hareketin üzerine uygulanan çarpandır.
 
 ### Gizlilik
 

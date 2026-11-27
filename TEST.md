@@ -53,7 +53,11 @@ Aşağıda klavye ve farenin W'ye bağlı olduğu varsayıldı. Mac'in klavyesin
 | 3.6 | Kenar çubuğu anahtarını kapatıp yeniden başlatın, kenara yaklaşın. | Çubuk görünmez, geçiş yine çalışır. |
 | 3.7 | M'deyken **Ctrl+Alt+Shift+Esc** (klavye W'deyse) basın. | Klavye ve fare anında W'ye döner. |
 
+Windows'u %150 veya %200 ölçekli bir ekranda kullanırken **İmleç hızı** değerini 1,00× yapın. Yavaş ve hızlı hareketi iki yönde deneyin. Küçük dikey ve yatay kaydırmaların doğru yönde iletildiğini, Mac tarafında tam bir çark adımı beklemediğini kontrol edin.
+
 ## 4. Tuşlar
+
+4.1–4.3 için alıcıda **Ctrl ve Command kısayollarını uyarla** seçeneğini açın. Seçenek kapalıyken Ctrl, Command ve Windows tuşlarının kendi işlevleriyle iletildiğini iki yönde kontrol edin. Aynı klavye düzeniyle Türkçe Q karakterlerini yazın ve medya tuşlarının harf üretmediğini kontrol edin.
 
 | # | Adım | Beklenen |
 |---|---|---|

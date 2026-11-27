@@ -12,6 +12,8 @@ pub struct Monitor {
     pub name: String,
     pub bounds: Rect,
     pub primary: bool,
+    /// Coordinate units per logical point, multiplied by 100.
+    pub scale_percent: u16,
 }
 
 /// Whether the OS lets this process see and post input (macOS privacy settings).

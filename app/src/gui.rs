@@ -118,7 +118,7 @@ impl Form {
             address: file.connect.unwrap_or_default(),
             name: file.name.unwrap_or_else(config::default_name),
             speed: file.speed.unwrap_or(1.0),
-            swap: file.swap_ctrl_cmd.unwrap_or(true),
+            swap: file.swap_ctrl_cmd.unwrap_or(false),
             edge_delay_ms: file.edge_delay_ms.unwrap_or(0),
             edge_bar: file.edge_bar.unwrap_or(true),
             clipboard: file.clipboard.unwrap_or(true),
@@ -714,7 +714,7 @@ impl GuiApp {
                 });
                 slider.labelled_by(label.id);
                 theme::divider(ui);
-                let swap = "Ctrl ile Cmd yer değiştirsin";
+                let swap = "Ctrl ve Command kısayollarını uyarla";
                 theme::row(ui, swap, |ui| theme::switch(ui, &mut form.swap, swap));
                 theme::divider(ui);
                 theme::row(ui, "Geçiş", |ui| {
