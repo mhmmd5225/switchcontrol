@@ -26,6 +26,7 @@ pub fn monitors() -> Vec<Monitor> {
         name: "virtual".into(),
         bounds: Rect { left: 0, top: 0, right: 1920, bottom: 1080 },
         primary: true,
+        scale_percent: 100,
     }]
 }
 

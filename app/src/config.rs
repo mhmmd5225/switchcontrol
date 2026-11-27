@@ -18,7 +18,8 @@ usage: switchcontrol --side left|right [--listen ADDR | --connect ADDR] [options
   --connect ADDR      connect to the peer, e.g. 192.168.1.20 or 192.168.1.20:24800
   --name NAME         name shown to the peer (default: computer name)
   --speed F           pointer speed on the peer (default 1.0)
-  --no-swap           keep Ctrl and Cmd/Win as they are
+  --swap              adapt Ctrl and Cmd/Win shortcuts between systems
+  --no-swap           forward Ctrl and Cmd/Win unchanged (default)
   --edge-delay MS     push against the edge this long before crossing (default 0)
   --no-clipboard      do not share clipboard text with the other computer
   --no-announce       do not make this computer visible on the local network
@@ -104,6 +105,7 @@ pub fn from_args(args: &[String]) -> Result<Settings, String> {
                 let raw = value()?;
                 cli.speed = Some(raw.parse().map_err(|_| format!("--speed: not a number: {raw}"))?);
             }
+            "--swap" => cli.swap_ctrl_cmd = Some(true),
             "--no-swap" => cli.swap_ctrl_cmd = Some(false),
             "--no-clipboard" => cli.clipboard = Some(false),
             "--no-announce" => cli.announce = Some(false),
@@ -177,7 +179,7 @@ pub fn resolve(config: FileConfig, flags: RunFlags) -> Result<Settings, String> 
         name: config.name.filter(|n| !n.trim().is_empty()).unwrap_or_else(default_name),
         side,
         net,
-        swap_ctrl_cmd: config.swap_ctrl_cmd.unwrap_or(true),
+        swap_ctrl_cmd: config.swap_ctrl_cmd.unwrap_or(false),
         speed,
         edge_delay: Duration::from_millis(edge_delay_ms),
         clipboard: config.clipboard.unwrap_or(true),
@@ -245,7 +247,8 @@ mod tests {
         let s = parse("--side right").unwrap();
         assert_eq!(s.side, Side::Right);
         assert_eq!(s.net, NetMode::Listen("0.0.0.0:24800".into()));
-        assert!(s.swap_ctrl_cmd);
+        assert!(!s.swap_ctrl_cmd);
+        assert!(parse("--side right --swap").unwrap().swap_ctrl_cmd);
         assert!(s.clipboard);
         assert_eq!(s.speed, 1.0);
         assert!(!parse("--side right --no-clipboard").unwrap().clipboard);

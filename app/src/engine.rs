@@ -109,7 +109,8 @@ fn run(
 ) -> Result<(), Box<dyn Error>> {
     let log = |text: String| report(Report::Log(text));
     sys::init();
-    let screens: Vec<_> = sys::monitors().into_iter().map(|m| m.bounds).collect();
+    let monitors = sys::monitors();
+    let screens: Vec<_> = monitors.iter().map(|m| m.bounds).collect();
     if screens.is_empty() {
         return Err("no monitors found".into());
     }
@@ -124,7 +125,8 @@ fn run(
         Os::current(),
         settings.name.clone(),
         screens.clone(),
-    );
+    )
+    .with_screen_scales(monitors.iter().map(|m| m.scale_percent).collect());
 
     let mut io = if settings.dry_run {
         Io { capture: None, injector: None }

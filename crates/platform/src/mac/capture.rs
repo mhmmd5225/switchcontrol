@@ -291,13 +291,21 @@ unsafe fn translate(
             };
             emit(button(which, ty == kCGEventOtherMouseDown));
         }
-        kCGEventScrollWheel => {
+        kCGEventScrollWheel if grabbing => {
             // Fixed-point (16.16) line deltas also cover fractional trackpad scrolls.
             // Axis 1 is vertical (positive = away from the user). Axis 2 is
             // horizontal with positive = left, the opposite of the wire format.
             let (mut rest_y, mut rest_x) = state.scroll_rest.get();
-            rest_y += field(kCGScrollWheelEventFixedPtDeltaAxis1) * 120;
-            rest_x -= field(kCGScrollWheelEventFixedPtDeltaAxis2) * 120;
+            let fixed_or_whole = |fixed, whole| match field(fixed) {
+                0 => field(whole) * 65536,
+                value => value,
+            };
+            rest_y +=
+                fixed_or_whole(kCGScrollWheelEventFixedPtDeltaAxis1, kCGScrollWheelEventDeltaAxis1)
+                    * 120;
+            rest_x -=
+                fixed_or_whole(kCGScrollWheelEventFixedPtDeltaAxis2, kCGScrollWheelEventDeltaAxis2)
+                    * 120;
             let (dy, dx) = (rest_y / 65536, rest_x / 65536);
             state.scroll_rest.set((rest_y - dy * 65536, rest_x - dx * 65536));
             if dx != 0 || dy != 0 {

@@ -176,8 +176,10 @@ fn lookup(usage: u16, column: fn(&(u16, u16, u16)) -> u16) -> Option<u16> {
 }
 
 pub fn hid_from_win(scan: u16) -> Option<u16> {
-    // Some keys (e.g. Right Shift) occasionally arrive with a stray extended flag.
-    find(scan, |r| r.1).or_else(|| find(scan & 0xFF, |r| r.1))
+    // Right Shift can carry a stray extended flag. Other extended codes
+    // are distinct keys, even if their low byte matches an ordinary key.
+    let scan = if scan == 0xE036 { 0x36 } else { scan };
+    find(scan, |r| r.1)
 }
 
 pub fn win_from_hid(usage: u16) -> Option<u16> {
@@ -213,6 +215,13 @@ mod tests {
         for (i, row) in KEYS.iter().enumerate() {
             assert!(KEYS[i + 1..].iter().all(|other| other.0 != row.0), "duplicate {:#x}", row.0);
         }
+    }
+
+    #[test]
+    fn unsupported_extended_keys_do_not_turn_into_letters() {
+        assert_eq!(hid_from_win(0xE010), None); // Previous Track, not Q.
+        assert_eq!(hid_from_win(0xE019), None); // Next Track, not P.
+        assert_eq!(hid_from_win(0xE036), Some(usage::RIGHT_SHIFT));
     }
 
     #[test]

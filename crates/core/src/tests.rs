@@ -60,6 +60,38 @@ fn injected(actions: &[Action]) -> Vec<InputEvent> {
 }
 
 #[test]
+fn remote_motion_preserves_logical_distance_in_both_directions() {
+    let mut windows = pc().with_screen_scales(vec![200]);
+    let mut mac = mac().with_screen_scales(vec![100]);
+    windows.peer_connected(mac.hello());
+    mac.peer_connected(windows.hello());
+
+    windows.local_input(moved(2559, 720));
+    assert!(sent(&windows.local_input(InputEvent::MouseDelta { dx: 1, dy: 0 })).is_empty());
+    assert_eq!(
+        sent(&windows.local_input(InputEvent::MouseDelta { dx: 1, dy: 0 })),
+        vec![Message::MouseMove { x: 1, y: 491 }]
+    );
+
+    mac.local_input(moved(0, 491));
+    assert_eq!(
+        sent(&mac.local_input(InputEvent::MouseDelta { dx: -10, dy: 0 })),
+        vec![Message::MouseMove { x: 2539, y: 720 }]
+    );
+}
+
+#[test]
+fn legacy_peer_keeps_the_original_pointer_scale() {
+    let mut windows = pc().with_screen_scales(vec![200]);
+    windows.peer_connected(mac().hello());
+    windows.local_input(moved(2559, 720));
+    assert_eq!(
+        sent(&windows.local_input(InputEvent::MouseDelta { dx: 10, dy: 0 })),
+        vec![Message::MouseMove { x: 10, y: 491 }]
+    );
+}
+
+#[test]
 fn handoff_avoids_a_gap_between_destination_displays() {
     let mut pc = pc();
     pc.peer_connected(Hello {
